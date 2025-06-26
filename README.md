@@ -1,1 +1,3 @@
-# REU-PSU-Research-Project
+# A Topology-Based Framework for Assessing the Statistical Robustness of Multi-Layer Coastal Infrastructures
+
+The increasing frequency and intensity of climate-related threats, particularly in coastal regions, expose the profound vulnerabilities of modern society's critical infrastructure. The systems providing energy, transportation, and telecommunications are not independent entities but form a complex, interconnected web where a failure in one can trigger a cascade of disruptions across the others. Traditional risk assessment methods, which often analyze these sectors in isolation, are no longer sufficient to capture the systemic vulnerabilities that emerge from these interdependencies. This report introduces a novel methodology for quantifying the resilience of these coupled systems by developing a Topology-based Statistical Robustness (TSR) metric.
