@@ -37,13 +37,13 @@ To my surprise, we got something working amazingly, this was able to be generate
 ![{A2E1F191-97DA-4F9F-BECD-8CA345D5C5B0}](https://github.com/user-attachments/assets/ce8d0fda-f063-4316-8b76-ccc98ce2dcb3)
 
 
-## 6/27 - Writing Presentation on Key paper
+## 6/27 - Writing Presentation on key paper
 
 im diving farther into the reasearch paper my faculty mentor has provided me, i plan to present this on Tuesday, July 1st, so far im starting to understand the concepts, but i need to look into the mathy stuff more.
 
 I finished up the day with reading and really diving into the paper that Dr. Dorcas provided me, there are alot of cool therories that i have been reading on based on the paper, like the vietoris rips complex and simplices leading into Betti numbers. Next week i will finish up my presentation for the key paper i found.
 
 
-## 6/30
+## 6/30 - Finishing presentation on key paper
 
-Today im working on finishing the presentation as mentioned beforehand, once i present and finish up with that, ill begin to look at papers that actually dive into the aspects of extreme weather or disasters.
+Today im working on finishing the presentation as mentioned beforehand, once i present and finish up with that, ill begin to look at papers that actually dive into the aspects of extreme weather or disasters. If possible, i hope Dr. Dorcas can provide me the code from R so i can have a better, general idea of what to program..
