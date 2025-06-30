@@ -40,3 +40,10 @@ To my surprise, we got something working amazingly, this was able to be generate
 ## 6/27 - Writing Presentation on Key paper
 
 im diving farther into the reasearch paper my faculty mentor has provided me, i plan to present this on Tuesday, July 1st, so far im starting to understand the concepts, but i need to look into the mathy stuff more.
+
+I finished up the day with reading and really diving into the paper that Dr. Dorcas provided me, there are alot of cool therories that i have been reading on based on the paper, like the vietoris rips complex and simplices leading into Betti numbers. Next week i will finish up my presentation for the key paper i found.
+
+
+## 6/30
+
+Today im working on finishing the presentation as mentioned beforehand, once i present and finish up with that, ill begin to look at papers that actually dive into the aspects of extreme weather or disasters.
