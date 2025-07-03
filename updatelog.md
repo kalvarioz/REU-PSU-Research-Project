@@ -47,3 +47,9 @@ I finished up the day with reading and really diving into the paper that Dr. Dor
 ## 6/30 - Finishing presentation on key paper
 
 Today im working on finishing the presentation as mentioned beforehand, once i present and finish up with that, ill begin to look at papers that actually dive into the aspects of extreme weather or disasters. If possible, i hope Dr. Dorcas can provide me the code from R so i can have a better, general idea of what to program..
+
+## 7/1 - Reading through key paper presentation
+
+## 7/2 - Found a SUPER key paper, this has a lot of similarties of what i am planning on, and i can create something possibly more advanced..
+
+
