@@ -1,0 +1,47 @@
+//--------------------------------------------------------------------------------
+// PowerWorld Simulator AUX File
+// Created from TDA Clustering R Script
+// Defines a 4-bus case with TDA cluster information, generators, and loads.
+//--------------------------------------------------------------------------------
+
+SCRIPT
+{
+EnterMode(Edit);
+}
+
+Bus (Number,Name,NomkV,Slack)
+{
+     1 "Bus 1 - Grp 1" 138 "YES" 
+     2 "Bus 2 - Grp 1" 138 "NO " 
+     3 "Bus 3 - Grp 1" 138 "NO " 
+     4 "Bus 4 - Grp 1" 138 "NO " 
+}
+
+Gen (BusNum,ID,Status,VoltSet,MWSetPoint,MWMax,MvarMax,MvarMin)
+{
+    1 "1" "Closed" 1.02 100.0 500.0 300.0 -300.0
+    2 "1" "Closed" 1.02 50.0 200.0 100.0 -100.0
+    3 "1" "Closed" 1.02 50.0 200.0 100.0 -100.0
+    4 "1" "Closed" 1.02 50.0 200.0 100.0 -100.0
+}
+
+Load (BusNum,ID,Status,MW,Mvar)
+{
+    2 "1" "Closed" 75.0 25.0
+    3 "1" "Closed" 75.0 25.0
+    4 "1" "Closed" 75.0 25.0
+}
+
+Branch (BusNumFrom,BusNumTo,Circuit,R,X,LimitMVAA,LimitMVAB,LimitMVAC)
+{
+     1 2 "1" 0.002 0.02 0.0234 0.03456 0.06 
+     1 3 "1" 0.003 0.03 0.0442 0.06271 0.05 
+     2 3 "1" 0.0045 0.045 0.0156 0.3341 0.8855 
+     2 4 "1" 0.006 0.06 0.01223 0.0457 0.0445 
+     3 4 "1" 0.007 0.07 0.34 0.02356 0.088 
+}
+
+SCRIPT
+{
+ClearPowerFlowSolutionAidValues;
+}
