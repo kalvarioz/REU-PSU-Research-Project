@@ -51,5 +51,10 @@ Today im working on finishing the presentation as mentioned beforehand, once i p
 ## 7/1 - Reading through key paper presentation
 
 ## 7/2 - Found a SUPER key paper, this has a lot of similarties of what i am planning on, and i can create something possibly more advanced..
-
+## 7/3
+## 7/4 
+## 7/5
+## 7/6
+## 7/7
+## 7/8
 
