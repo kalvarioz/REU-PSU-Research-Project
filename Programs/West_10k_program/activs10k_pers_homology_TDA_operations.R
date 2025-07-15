@@ -11,6 +11,7 @@ setwd("~/REU-PSU-Research-Project/Programs/West_10k_program")
 # Author: Brandon Calvario
 
 library(igraph)
+library(TDA)
 
 start.time = Sys.time()
 
@@ -157,6 +158,92 @@ write.csv(aux_data$bus_df, "10k_buses.csv", row.names = FALSE)
 write.csv(aux_data$branch_df, "10k_branches.csv", row.names = FALSE)
 write_graph(g2000, "10k_bus_grid.gml", format = "gml")
 
+create_adjacency_matrix <- function(bus_df, branch_df) {
+  bus_nums <- unique(bus_df$BusNum)
+  n <- length(bus_nums)
+  adj_matrix <- matrix(0, nrow = n, ncol = n, dimnames = list(bus_nums, bus_nums))
+  
+  for (i in 1:nrow(branch_df)) {
+    from_bus <- branch_df$BusNum[i]
+    to_bus <- branch_df[["BusNum:1"]][i]
+    
+    if (from_bus %in% bus_nums && to_bus %in% bus_nums) {
+      adj_matrix[from_bus, to_bus] <- 1
+      # If undirected graph, also include:
+      adj_matrix[to_bus, from_bus] <- 1
+    }
+  }
+  
+  return(adj_matrix)
+}
+
+write_perseus_distance_matrix <- function(dist_matrix, file_name = "perseus_distmat.txt") {
+  n <- nrow(dist_matrix)
+  file_conn <- file(file_name, open = "wt")
+  
+  # First line must be number of vertices
+  writeLines(as.character(n), file_conn)
+  
+  # Write upper triangular part (excluding diagonal) row-wise
+  for (i in 1:(n-1)) {
+    line <- paste(dist_matrix[i, (i+1):n], collapse = " ")
+    writeLines(line, file_conn)
+  }
+  
+  close(file_conn)
+}
+
+# Generate adjacency matrix from your AUX data
+adjacency_matrix <- create_adjacency_matrix(aux_data$bus_df, aux_data$branch_df)
+print(adjacency_matrix[1:10, 1:10]) # Quick check, adjust indexing as necessary
+dist_matrix <- 1 - adjacency_matrix  # Simplified: assumes binary adjacency for TDA
+
+
+# Save adjacency matrix as CSV for external reference
+write.csv(adjacency_matrix, "bus_adjacency_matrix.csv")
+
+# Now perform TDA operations, for instance Vietoris-Rips filtration and persistent homology:
+write_perseus_distance_matrix(dist_matrix, "perseus_distmat.txt")
+system("./perseus distmat perseus_distmat.txt perseus_output")
+
+
+# Example using Rips filtration with 'ripsDiag' from the TDA package:
+max_dimension <- 2      # Max dimension of homological features to compute
+max_scale <- 5          # Maximum scale parameter for filtration (adjust as needed)
+
+tda_result <- ripsDiag(
+  X            = dist_matrix,
+  maxdimension = max_dimension,
+  maxscale     = max_scale,
+  dist         = "arbitrary",
+  library      = "Dionysus",
+  printProgress= TRUE
+)
+
+load_perseus_barcodes <- function(file_path) {
+  barcode_data <- read.table(file_path, header = FALSE, col.names = c("Birth", "Death"))
+  return(barcode_data)
+}
+
+# Example loading H1 features
+h1_barcodes <- load_perseus_barcodes("perseus_output_1.txt")
+print(h1_barcodes)
+
+# Simple visualization
+library(ggplot2)
+
+ggplot(h1_barcodes, aes(x = Birth, xend = Death, y = seq_along(Birth), yend = seq_along(Death))) +
+  geom_segment(linewidth = 1.2, color = "blue") +
+  labs(title = "H1 Persistent Homology Barcodes", x = "Filtration Parameter", y = "Features") +
+  theme_minimal()
+
+# Plot TDA Results (persistent homology barcodes)
+plot(tda_result[["diagram"]], main = "Persistent Homology of Grid")
+
+# You may now use this baseline (original state) for comparison after attacks:
+save(tda_result, file = "tda_original_state.RData")
+
+
+
 end.time = Sys.time()
 time.taken = end.time - start.time
-

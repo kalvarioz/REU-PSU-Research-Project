@@ -1,3 +1,7 @@
+rm(list = ls())
+
+setwd("~/REU-PSU-Research-Project/Programs/West_10k_program")
+
 # activs10k_resilience_assessment.R
 #
 # This script focuses on analyzing the structural resilience of a power grid network
@@ -11,6 +15,8 @@ library(sf)
 library(ggplot2)
 library(maps)
 library(parallel)
+
+start.time = Sys.time()
 
 
 graph_original <- read_graph("10k_bus_grid.gml", format = "gml")
@@ -140,3 +146,6 @@ attacked <- simulate_attack(
 )
 print(measure_resilience(attacked))
 print( visualize_graph_west(attacked) )
+
+end.time = Sys.time()
+time.taken = end.time - start.time
