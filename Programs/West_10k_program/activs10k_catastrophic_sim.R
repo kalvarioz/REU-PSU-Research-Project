@@ -4,8 +4,7 @@ library(sf)
 library(igraph)
 library(dplyr)
 library(maps)
-
-### ---- 1. Data Loading & Preparation ----
+library(ggplot2)
 
 # Load data
 mpc_bus <- read.csv("mpc_bus.csv")
@@ -32,9 +31,6 @@ bus_gen_pre <- mpc_gen %>%
 bus_info_pre <- bus_load_pre %>%
   left_join(bus_gen_pre, by = "bus_i") %>%
   mutate(gen_load_ratio = total_gen / (Pd + 1e-3))
-
-
-### ---- 2. Wildfire Scenario Functions ----
 
 generate_growing_fire <- function(center_lon, center_lat, steps, max_radius_km = 300) {
   perims <- vector("list", steps)
@@ -85,8 +81,6 @@ prepare_edges_sf <- function(graph, bus_data) {
   st_sfc(lines_list, crs = 4326)
 }
 
-### ---- 3. Generate Synthetic Wildfire Data ----
-
 set.seed(123)
 steps <- 20
 center_lon <- runif(1, -122, -105)
@@ -94,7 +88,71 @@ center_lat <- runif(1, 33, 45)
 synthetic_perims <- generate_growing_fire(center_lon, center_lat, steps, max_radius_km = 300)
 graph_sequence <- simulate_fire_cascade(graph_original, buses_sf, synthetic_perims, steps = steps)
 
-### ---- 4. Shiny UI ----
+resilience_metrics_list <- lapply(seq_along(graph_sequence), function(step) {
+  graph <- graph_sequence[[step]]
+  comps <- components(graph)
+  in_service_buses <- as.numeric(V(graph)$name)
+  
+  bus_info_post <- bus_info_pre %>%
+    mutate(
+      is_active = bus_i %in% in_service_buses,
+      load_lost = ifelse(!is_active, Pd, 0),
+      gen_lost = ifelse(!is_active, total_gen, 0)
+    )
+  
+  total_load <- sum(bus_info_post$Pd, na.rm = TRUE)
+  total_gen <- sum(bus_info_post$total_gen, na.rm = TRUE)
+  load_served <- sum(bus_info_post$Pd[bus_info_post$is_active], na.rm = TRUE)
+  gen_served <- sum(bus_info_post$total_gen[bus_info_post$is_active], na.rm = TRUE)
+  
+  data.frame(
+    step = step,
+    islands = comps$no,
+    largest_island = max(comps$csize),
+    load_served_pct = 100 * load_served / total_load,
+    gen_served_pct = 100 * gen_served / total_gen,
+    buses_active = length(in_service_buses),
+    buses_lost = nrow(bus_info_pre) - length(in_service_buses)
+  )
+})
+
+resilience_metrics_df <- do.call(rbind, resilience_metrics_list)
+
+
+write_aux_step <- function(step_num, graph, output_dir = "pw_aux_steps") {
+  if (!dir.exists(output_dir)) dir.create(output_dir)
+  
+  active_buses <- as.numeric(V(graph)$name)
+  inactive_buses <- setdiff(bus_info_pre$bus_i, active_buses)
+  
+  # Deactivate buses
+  bus_block <- paste0(
+    "DATA (Bus, [BusNum, Status]){\n",
+    paste(sprintf("{ %s, NO }", inactive_buses), collapse = "\n"),
+    "}\nENDDATA\n\n"
+  )
+  
+  # Deactivate branches (if either end is down)
+  all_edges <- igraph::as_data_frame(graph_original, what = "edges")
+  all_edges$from <- as.numeric(all_edges$from)
+  all_edges$to <- as.numeric(all_edges$to)
+  broken_branches <- all_edges %>%
+    filter(!(from %in% active_buses & to %in% active_buses))
+  
+  branch_block <- paste0(
+    "DATA (Branch, [BusFromNum, BusToNum, Circuit, Status]){\n",
+    paste(sprintf("{ %s, %s, \"1\", NO }", broken_branches$from, broken_branches$to), collapse = "\n"),
+    "}\nENDDATA\n"
+  )
+  
+  # Write AUX file
+  writeLines(c(bus_block, branch_block), con = file.path(output_dir, sprintf("step_%02d.aux", step_num)))
+}
+
+# Export all steps
+for (i in seq_along(graph_sequence)) {
+  write_aux_step(i, graph_sequence[[i]])
+}
 
 ui <- fluidPage(
   titlePanel("Interactive Catastrophic Fire Grid Explorer"),
@@ -102,12 +160,11 @@ ui <- fluidPage(
   absolutePanel(
     top = 10, right = 10, width = 300,
     sliderInput("step", "Step", min = 1, max = length(graph_sequence),
+                plotOutput("resilience_plot", height = "300px"),
                 value = 1, step = 1, animate = animationOptions(1200)),
     verbatimTextOutput("resilience_metrics")
   )
 )
-
-### ---- 5. Shiny Server ----
 
 server <- function(input, output, session) {
   output$map <- renderLeaflet({
@@ -119,15 +176,53 @@ server <- function(input, output, session) {
   output$resilience_metrics <- renderPrint({
     current_graph <- graph_sequence[[input$step]]
     comps <- components(current_graph)
-    largest_island_size <- max(comps$csize)
-    num_islands <- comps$no
+    
+  output$resilience_plot <- renderPlot({
+      req(resilience_metrics_df)
+      ggplot(resilience_metrics_df, aes(x = step)) +
+        geom_line(aes(y = load_served_pct, color = "Load Served")) +
+        geom_line(aes(y = gen_served_pct, color = "Generation Served")) +
+        geom_line(aes(y = 100 * (1 - buses_lost / nrow(bus_info_pre)), color = "Buses Active")) +
+        scale_color_manual(values = c("Load Served" = "blue", "Generation Served" = "green", "Buses Active" = "orange")) +
+        labs(title = "Resilience Metrics Over Fire Progression",
+             x = "Simulation Step", y = "% Value",
+             color = "Metric") +
+        theme_minimal()
+    })
+    
+    # Identify active buses
     in_service_buses <- as.numeric(V(current_graph)$name)
-    load_served <- sum(bus_info_pre$Pd[bus_info_pre$bus_i %in% in_service_buses], na.rm = TRUE)
-    load_total <- sum(bus_info_pre$Pd, na.rm = TRUE)
+    
+    # Add resiliency info per bus
+    bus_info_post <- bus_info_pre %>%
+      mutate(
+        is_active = bus_i %in% in_service_buses,
+        load_lost = ifelse(!is_active, Pd, 0),
+        gen_lost = ifelse(!is_active, total_gen, 0)
+      )
+    
+    # Summary stats
+    total_load <- sum(bus_info_post$Pd, na.rm = TRUE)
+    total_gen <- sum(bus_info_post$total_gen, na.rm = TRUE)
+    load_served <- sum(bus_info_post$Pd[bus_info_post$is_active], na.rm = TRUE)
+    gen_served <- sum(bus_info_post$total_gen[bus_info_post$is_active], na.rm = TRUE)
+    
+    buses_total <- nrow(bus_info_post)
+    buses_lost <- sum(!bus_info_post$is_active)
+    
     cat(
-      "Islands:", num_islands, "\n",
-      "Largest Island Size:", largest_island_size, "\n",
-      "% Load Served:", round(100 * load_served / load_total, 1), "%"
+      "Step:", input$step, "\n",
+      "----------------------------\n",
+      "Islands:", comps$no, "\n",
+      "Largest Island Size:", max(comps$csize), "\n\n",
+      
+      "Network Resilience:\n",
+      "----------------------------\n",
+      "Total Buses Lost:", buses_lost, "of", buses_total, "\n",
+      "Load Served:", round(100 * load_served / total_load, 1), "%\n",
+      "Generation Served:", round(100 * gen_served / total_gen, 1), "%\n",
+      "Load Lost (MW):", round(total_load - load_served, 1), "\n",
+      "Generation Lost (MW):", round(total_gen - gen_served, 1), "\n"
     )
   })
   
@@ -173,7 +268,5 @@ server <- function(input, output, session) {
       )
   })
 }
-
-### ---- 6. Run App ----
 
 shinyApp(ui, server)
