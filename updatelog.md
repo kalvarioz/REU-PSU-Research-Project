@@ -76,9 +76,13 @@ To begin i will be doing some practice code as well as some tests using the 118 
 
 We will also focus on Persistent Homology as well as the Vietoris Rips Filtration, so this is a proper direction that can help me when reading and looking into data.
 
+<img width="2310" height="1069" alt="{5393B757-EC27-4591-A6D1-E33C7709059A}" src="https://github.com/user-attachments/assets/3927e3c4-6e97-4795-8c9c-fb3d87948ca3" />
+
 ## 7/8 - Texas grid began to work and completed practice code
 
 The code was all straightforward, i finished the data pretty early on, so now i think i will focus a bit more on some information based on power world and some tools i can use to begin to develop the 10,000 bus power grid.
+
+<img width="817" height="827" alt="{DF352A1C-702E-4263-B827-3007ADF8E3FF}" src="https://github.com/user-attachments/assets/303baffc-bdba-4beb-9849-5912dc8cbd52" />
 
 ## 7/9 - PowerWorld dive-in and beginning of power grid development
 
@@ -92,9 +96,13 @@ I began to develop the powergrid and it was a success.
 
 I was also able to develop a simple program that removes nodes, so ill try to make something semi-realistic, our direction to this is going to be to develop a wildfire scenario as i think that is most compatible to some events that take place in the western united states.
 
+![power_grid_attack](https://github.com/user-attachments/assets/1bfd720e-2e70-42e8-891d-f4a44fd33ab4)
+
 ## 7/11 - First concept and test of node attacks have been created!
 
 Super exciting update for the project as now it will serve as a foundational step to what i need to create for the databases.
+
+<img width="888" height="993" alt="{1D6F4A49-C5A0-4EEE-8413-85A89CCCF2CE}" src="https://github.com/user-attachments/assets/0742597b-3269-444c-8238-4dcbfe8f18a6" />
 
 ## 7/14 - Met with Dr. Ofori-Boateng, some redirection, but otherwise doing good progress.
 
@@ -107,12 +115,14 @@ I began to make my graphs more dynamic, separating data from buses, branches, an
 This is good, as we can separate the data as well as observe the types of generators we have to use in our simulation.
 
 Whats awesome is we now have more dynamic wildfire simulations, this will be helpful to siulate some sections, but we need to also find a way to use databases.
+<img width="1867" height="1170" alt="grid_with_resilience_graph" src="https://github.com/user-attachments/assets/90a8aa08-b3fd-4f8d-a871-e4af5ff28e79" />
 
 ## 7/16 - Outage grids, Resilience graphs,
 
 We got some grayed out areas to show where the outages are, as well as graphs displaying the resilience and cascading fall of the data once these nodes are attacked, i think this tool will be super useful.
 
 I began to also work on my progress update that will be presented on Thursday (tomorrow).
+<img width="2577" height="848" alt="Grid_with_bus_resilience_and_algebraic_connectivity" src="https://github.com/user-attachments/assets/7f81f6a7-07e7-4a30-acef-37d7fc086132" />
 
 ## 7/17 - Progress presentation!!
 Took some time to create a presentation on my current progress and after to do some reflection, i believe i am on the right track to complete this.
