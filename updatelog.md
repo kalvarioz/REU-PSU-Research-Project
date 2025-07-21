@@ -60,15 +60,33 @@ Today im working on finishing the presentation as mentioned beforehand, once i p
 
 ## 7/6
 
-## 7/7 - Met with Dr. Ofori-Boateng
+## 7/7 - Met with Dr. Ofori-Boateng - Lots of info!
 
-## 7/8
+There was alot of information to take in and learn about, there is this software called PowerWorld, that seems to be like a data flow software for grids that i am being provided with.
 
-## 7/9
+The current goal is to create some files based on a 10,000 bus grid based on the western United States.
 
-## 7/10
+To begin i will be doing some practice code as well as some tests using the 118 and 2000 bus grid provided to me as well, but ill try to ramp up to the 10,000 grid as soon as possibe,
 
-## 7/11
+## 7/8 - Texas grid began to work and completed practice code
+
+The code was all straightforward, i finished the data pretty early on, so now i think i will focus a bit more on some information based on power world and some tools i can use to begin to develop the 10,000 bus power grid.
+
+## 7/9 - PowerWorld dive-in and beginning of power grid development
+
+I spent most of the day learning about PowerWorld and what it can do in power systems, im pretty restricted though, to only do up to 13 bus grids, but its giving me some opportunity to learn about these systems. Pretty interesting! 
+
+I also began to develop the map and grids for the 10k power grid.
+
+## 7/10 - Beginning to develop 10k Power grid - Success!
+
+I began to develop the powergrid and it was a success.
+
+I was also able to develop a simple program that removes nodes, so ill try to make something semi-realistic, our direction to this is going to be to develop a wildfire scenario as i think that is most compatible to some events that take place in the western united states.
+
+## 7/11 - First concept and test of node attacks have been created!
+
+Super exciting update for the project as now it will serve as a foundational step to what i need to create for the databases.
 
 ## 7/14 - Met with Dr. Ofori-Boateng, some redirection, but otherwise doing good progress.
 
