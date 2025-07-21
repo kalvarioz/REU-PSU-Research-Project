@@ -50,15 +50,21 @@ Today im working on finishing the presentation as mentioned beforehand, once i p
 
 ## 7/1 - Reading through key paper presentation
 
-## 7/2 - Found a SUPER key paper, this has a lot of similarties of what i am planning on, and i can create something possibly more advanced..
+Doing some rehearsing to see how much i actually understand the paper, so far i got a decent understanding, doesn't seem too terrible.
 
-## 7/3 
+## 7/2 - Presenting key paper
 
-## 7/4 
+Went well, i think now my next plan is to continue looking through more papers, i am also beginning to write out my rough draft for my paper, introduction and stuff, some things to get the ball rolling.
 
-## 7/5
+## 7/3 - Found a SUPER key paper, this has a lot of similarties of what i am planning on, and i can create something possibly more advanced..
 
-## 7/6
+This paper isn't directly related to TDA, but incorporates features that can be used in TDA, it's also in python.. so im not exactly sure how well this can be able to help, but worth a read.
+
+## 7/4 - Reading papers
+
+I found a paper based on cascading failures, and it is more closely related to TDA, but it is pretty mathematical, ill need to probably dive a bit more into it to see how useful it can be.
+
+Lots of topics seem a bit off from TDA, so looking at my resources, i feel like its pretty tricky looking at these methods that other researchers used.
 
 ## 7/7 - Met with Dr. Ofori-Boateng - Lots of info!
 
@@ -66,7 +72,9 @@ There was alot of information to take in and learn about, there is this software
 
 The current goal is to create some files based on a 10,000 bus grid based on the western United States.
 
-To begin i will be doing some practice code as well as some tests using the 118 and 2000 bus grid provided to me as well, but ill try to ramp up to the 10,000 grid as soon as possibe,
+To begin i will be doing some practice code as well as some tests using the 118 and 2000 bus grid provided to me as well, but ill try to ramp up to the 10,000 grid as soon as possible.
+
+We will also focus on Persistent Homology as well as the Vietoris Rips Filtration, so this is a proper direction that can help me when reading and looking into data.
 
 ## 7/8 - Texas grid began to work and completed practice code
 
