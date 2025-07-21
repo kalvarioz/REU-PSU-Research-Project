@@ -51,10 +51,53 @@ Today im working on finishing the presentation as mentioned beforehand, once i p
 ## 7/1 - Reading through key paper presentation
 
 ## 7/2 - Found a SUPER key paper, this has a lot of similarties of what i am planning on, and i can create something possibly more advanced..
-## 7/3
+
+## 7/3 
+
 ## 7/4 
+
 ## 7/5
+
 ## 7/6
-## 7/7
+
+## 7/7 - Met with Dr. Ofori-Boateng
+
 ## 7/8
+
+## 7/9
+
+## 7/10
+
+## 7/11
+
+## 7/14 - Met with Dr. Ofori-Boateng, some redirection, but otherwise doing good progress.
+
+Missed some ideas on relationship matrices, but the majority of data i need is already created, so i think this can be taken care of quickly.
+
+I began to make my graphs more dynamic, separating data from buses, branches, and other sectors. Switched to Leaflet for graph generation.
+
+## 7/15 - Got some color to separate buses, generators, and loads. First wildfire simulations!!!
+
+This is good, as we can separate the data as well as observe the types of generators we have to use in our simulation.
+
+Whats awesome is we now have more dynamic wildfire simulations, this will be helpful to siulate some sections, but we need to also find a way to use databases.
+
+## 7/16 - Outage grids, Resilience graphs,
+
+We got some grayed out areas to show where the outages are, as well as graphs displaying the resilience and cascading fall of the data once these nodes are attacked, i think this tool will be super useful.
+
+I began to also work on my progress update that will be presented on Thursday (tomorrow).
+
+## 7/17 - Progress presentation!!
+Took some time to create a presentation on my current progress and after to do some reflection, i believe i am on the right track to complete this.
+
+## 7/18 - Built the relationship matrices!!
+Pretty awesome results as i got the required relationship matrices from the data, need to normalize the now.
+
+## 7/21 - Met with Dr Ofori-Boateng, Building persistence diagrams for simulation,
+Met with my faculty mentor, looks like we are on the right track and about 70% of the way there, thats some sweet news to me!, i need to create some persistence diagrams instead of barcodes though, so ill work on that too.
+
+In terms of running these relationship matrices..
+
+Takes quite a while, but im getting results by testing in smaller sets, so ill try and run a large scale set and see how long it takes.
 
