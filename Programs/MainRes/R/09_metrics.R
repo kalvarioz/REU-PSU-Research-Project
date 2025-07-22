@@ -1,5 +1,0 @@
-eff <- \(g) mean_distance(as.igraph(g),directed=FALSE)
-E0 <- eff(supra)
-supra_pruned <- supra |> filter(!name %in% failed_all)
-E1 <- eff(supra_pruned)
-cat("Global-efficiency drop:", round(1-E1/E0,3),"\n")

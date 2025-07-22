@@ -12,10 +12,6 @@ library(future)
 
 setwd("~/REU-PSU-Research-Project/Programs/West_10k_program")
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  1. DATA LOADING & PREP
-# ──────────────────────────────────────────────────────────────────────────────
-
 # 1.a MATPOWER CSV exports
 plan(multisession, workers = detectCores() - 1)
 
@@ -105,10 +101,10 @@ west_states <- c("california","oregon","washington","idaho","montana",
                  "wyoming","nevada","utah","arizona","colorado","new mexico")
 west_sf <- states_sf[states_sf$ID %in% west_states, ]
 
-# 1.d Build graph + relationship matrices           ### UPDATED ###
+# 1.d Build graph + relationship matrices
 
 # — Compute true line admittances (Y = 1/(R + jX)) —
-#    (replace R / X with your actual attribute names if they differ)
+
 E(graph_original)$Y <- 1 / (E(graph_original)$LineR + 1i * E(graph_original)$LineX)
 E(graph_original)$Yreal <- Re(E(graph_original)$Y)
 # — Pull weighted adjacency from the new Y attribute —
@@ -156,9 +152,6 @@ fuel_pal <- colorFactor(
   ), domain = unique(mpc_gen$fuel_type)
 )
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  3. HELPER FUNCTIONS
-# ──────────────────────────────────────────────────────────────────────────────
 recompute_edge_attrs <- function(g, branch_data) {
   # 1) pull current edge list
   el <- igraph::as_data_frame(g, what = "edges") %>%
@@ -250,10 +243,6 @@ prepare_edges_sf <- function(graph, bus_data) {
   st_sfc(lines_list, crs = 4326)
 }
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  4. FIRE SPREAD MODEL SETUP
-# ──────────────────────────────────────────────────────────────────────────────
-
 set.seed(123)
 steps      <- 20
 center_lon <- -122.4194
@@ -302,10 +291,6 @@ cascade_result      <- simulate_fire_cascade(graph_original, buses_sf, synthetic
 graph_sequence      <- cascade_result$graphs
 buses_lost_per_step <- cascade_result$buses_lost_per_step
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  5. RESILIENCE METRICS (with spectral)
-# ──────────────────────────────────────────────────────────────────────────────
-
 resilience_metrics_df <- future_lapply(0:steps, function(step) {
   g      <- graph_sequence[[step+1]]
   comps  <- components(g)
@@ -350,10 +335,6 @@ resilience_metrics_df <- future_lapply(0:steps, function(step) {
     algebraic_connectivity = lam2
   )
 }) %>% bind_rows()
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  6. SHINY APP: UI & SERVER
-# ──────────────────────────────────────────────────────────────────────────────
 
 ui <- fluidPage(
   titlePanel("Interactive Catastrophic Fire Grid Explorer"),
