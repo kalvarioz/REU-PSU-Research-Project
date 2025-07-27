@@ -137,3 +137,15 @@ In terms of running these relationship matrices..
 
 Takes quite a while, but im getting results by testing in smaller sets, so ill try and run a large scale set and see how long it takes.
 
+## 7/22
+
+## 7/23
+
+## 7/24
+
+## 7/25
+
+##
+
+##
+
