@@ -137,15 +137,20 @@ In terms of running these relationship matrices..
 
 Takes quite a while, but im getting results by testing in smaller sets, so ill try and run a large scale set and see how long it takes.
 
-## 7/22
+## 7/22 - States are selectable
 
-## 7/23
+## 7/23 - 
 
-## 7/24
+## 7/24 - Progress update
 
-## 7/25
+## 7/25 - Writing initial rough draft of research paper.
 
-## 7/28
+## 7/28 - Met with Dr. Ofori-Boateng, More filtering and implementation ideas!
 
-## 7/29
+
+## 7/29 - Handling some errors.
+
+## 7/30 - eureka!
+
+## 7/31 - Running more tests
 
