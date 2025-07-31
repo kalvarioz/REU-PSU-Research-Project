@@ -152,5 +152,9 @@ Takes quite a while, but im getting results by testing in smaller sets, so ill t
 
 ## 7/30 - eureka!
 
+All because of a simple file name, always good to look though the program, luckily i was able to catch a super simple, yet ultra critical error, program now runs and is almost functional, looks like i need to adjust the UI for some bugs here and there.
+
 ## 7/31 - Running more tests
+
+Some errors, it seems to be mostly UI bugs, so ill be working on updating that and getting rid of those issues.
 
