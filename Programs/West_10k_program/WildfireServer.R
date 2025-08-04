@@ -1,7 +1,12 @@
+# =================================================================================================
+
 # server_1.R - Reorganized Modular Structure
-# ====================================================================
+
 # This file maintains all functionality while organizing code into logical modules
-# ====================================================================
+
+# Brandon Calvario
+
+# =================================================================================================
 
 library(shiny)
 library(leaflet)
@@ -9,14 +14,109 @@ library(sf)
 library(dplyr)
 library(shinyjs)
 
-source("global.R")
-source("main_attack_prototype_database.R")
-source("perseus_V3.R")
+source("Global.R")
+source("AttackAndCascade.R")
+source("TopologicalDataWorkflowWF.R")
 
+cleanup_parallel_resources <- function(force_cleanup = FALSE) {
+  message("Cleaning up parallel processing resources...")
+  
+  tryCatch({
+    # 1. Stop doParallel cluster if it exists
+    if (requireNamespace("doParallel", quietly = TRUE) && foreach::getDoParRegistered()) {
+      foreach::registerDoSEQ()
+      message("Switched doParallel to sequential")
+    }
+    
+    # 2. Reset the future plan to sequential, which helps close workers
+    if (requireNamespace("future", quietly = TRUE)) {
+      future::plan(future::sequential)
+      message("Reset future plan to sequential")
+    }
+    
+    # 3. Close any lingering text or socket connections left by workers
+    all_cons <- showConnections(all = TRUE)
+    if (nrow(all_cons) > 3) { # Keep stdin, stdout, stderr
+      text_cons_indices <- which(all_cons[, "class"] %in% c("textConnection", "sockconn"))
+      if (length(text_cons_indices) > 0) {
+        # Get connection numbers from row names
+        con_numbers <- as.integer(rownames(all_cons)[text_cons_indices])
+        for (con_id in con_numbers) {
+          try(close(getConnection(con_id)), silent = TRUE)
+        }
+        message("Closed ", length(text_cons_indices), " lingering connections")
+      }
+    }
+    
+    # 4. Reset data.table threads to a safe single-threaded default
+    if (requireNamespace("data.table", quietly = TRUE)) {
+      data.table::setDTthreads(1)
+      message("Reset data.table to single thread")
+    }
+    
+    # 5. Force garbage collection to release memory
+    gc(verbose = FALSE)
+    
+    message("Parallel resources cleaned up successfully")
+    
+  }, error = function(e) {
+    message("Error during parallel cleanup: ", e$message)
+  })
+  
+  return(invisible(TRUE))
+}
+
+# Add a connection monitoring function
+setup_parallel_processing_safe <- function(method = "multisession", max_workers = NULL) {
+  
+  # ALWAYS clean up before setting up a new plan
+  cleanup_parallel_resources(force_cleanup = TRUE)
+  
+  total_cores <- parallel::detectCores()
+    # Leave 2 cores for the OS and Shiny, but use at least 2 for parallel tasks. Cap at 4 for safety.
+  n_cores <- max(2, min(total_cores - 2, 4)) 
+  
+  if (!is.null(max_workers)) {
+    n_cores <- min(n_cores, max_workers)
+  }
+  
+  message("=== PARALLEL PROCESSING SETUP ===")
+  message("Total CPU cores detected: ", total_cores)
+  message("Cores allocated for analysis: ", n_cores)
+  
+  tryCatch({
+    # 'multisession' is the safest choice for Shiny apps as it avoids forking issues.
+    future::plan(future::multisession, workers = n_cores)
+    
+    # Set conservative options for Shiny
+    options(future.globals.maxSize = 1 * 1024^3) # 1GB limit for globals in Shiny
+    options(future.rng.onMisuse = "ignore")
+    
+    # Configure data.table and doParallel
+    if (requireNamespace("data.table", quietly = TRUE)) {
+      data.table::setDTthreads(min(n_cores, 2)) # Limit DT threads as well
+    }
+    if (requireNamespace("doParallel", quietly = TRUE)) {
+      doParallel::registerDoParallel(cores = n_cores)
+    }
+    
+    message("Parallel processing configured successfully:")
+    message("Method: multisession (Shiny-safe)")
+    message("Workers: ", future::nbrOfWorkers())
+    message("data.table threads: ", if(requireNamespace("data.table", quietly=TRUE)) data.table::getDTthreads() else "N/A")
+    
+  }, error = function(e) {
+    message("Error setting up future plan: ", e$message)
+    message("Falling back to sequential processing for safety.")
+    future::plan(future::sequential)
+    n_cores <- 1
+  })
+  
+  return(n_cores)
+}
 # ====================================================================
 # 1. INITIALIZATION & SYSTEM MANAGEMENT
 # ====================================================================
-
 setup_reactive_values <- function() {
   # This function should be called within the server context
   # and should directly create the reactive values, not return a list
@@ -29,7 +129,6 @@ setup_reactive_values <- function() {
     selected_state = selected_state
   ))
 }
-
 # Alternative approach - create reactive values directly in server function
 initialize_server_state <- function() {
   reactiveValues(
@@ -261,15 +360,25 @@ setup_cascade_reactives <- function(input, values, session) {  # ADD session
 setup_fire_data_reactives <- function(input) {
   # Create reactive for selected fire
   reactive({
-    req(input$fire_event)
+    # Handle both single fire_event and multiple fire_events inputs
+    selected_fires <- NULL
     
-    if (input$fire_event == "" || is.null(input$fire_event)) {
+    if (!is.null(input$fire_events) && length(input$fire_events) > 0) {
+      # Multiple selection (new system)
+      selected_fires <- input$fire_events
+    } else if (!is.null(input$fire_event) && input$fire_event != "") {
+      # Single selection (legacy compatibility)
+      selected_fires <- input$fire_event
+    }
+    
+    if (is.null(selected_fires) || length(selected_fires) == 0) {
       return(NULL)
     }
     
+    # Handle both single and multiple selections
     fire_data <- wfigs_perimeters %>%
-      filter(attr_IncidentName == input$fire_event)
-    
+      filter(attr_IncidentName %in% selected_fires)
+    # Apply existing filters (same as before)
     if (!is.null(input$state_select) && input$state_select != "") {
       fire_data <- fire_data %>%
         filter(tolower(attr_POOState) == tolower(input$state_select))
@@ -280,7 +389,7 @@ setup_fire_data_reactives <- function(input) {
         filter(fire_intensity == input$fire_intensity_select)
     }
     
-    # Apply additional filters
+    # Apply additional filters (existing code)
     if (!is.null(input$fuel_type_filter) && length(input$fuel_type_filter) > 0 && 
         !all(input$fuel_type_filter == "")) {
       fire_data <- fire_data %>%
@@ -306,6 +415,14 @@ setup_fire_data_reactives <- function(input) {
     }
     
     if (nrow(fire_data) == 0) return(NULL)
+    # Add compound event metadata
+    fire_data <- fire_data %>%
+      mutate(
+        compound_event_id = paste(sort(selected_fires), collapse = "_"),
+        is_compound_event = length(selected_fires) > 1,
+        compound_fire_count = length(selected_fires),
+        compound_fire_names = paste(selected_fires, collapse = ", ")
+      )
     
     return(fire_data)
   })
@@ -358,7 +475,7 @@ setup_filter_reactives <- function(input) {
   })
 }
 
-setup_tda_reactives <- function(input, values, session) {  # ADD input, values, session
+setup_tda_reactives <- function(input, values, session) {
   observe({
     if (!is.null(values$cascade_results)) {
       max_steps <- length(values$cascade_results$graphs) - 1
@@ -401,7 +518,6 @@ setup_map_reactives <- function(input, values, selected_fire) {  # ADD parameter
 # ====================================================================
 
 safe_input_access <- function(input_id, default_value = NULL) {
-  # ADD THIS CODE:
   tryCatch({
     if (!is.null(input[[input_id]])) {
       return(input[[input_id]])
@@ -411,19 +527,13 @@ safe_input_access <- function(input_id, default_value = NULL) {
     return(default_value)
   })
 }
-
 validate_input_exists <- function(input_id, input) {
-  # ADD THIS CODE:
   !is.null(input[[input_id]]) && input[[input_id]] != ""
 }
-
 check_input_readiness <- function(required_inputs, input) {
-  # ADD THIS CODE:
   all(sapply(required_inputs, function(x) validate_input_exists(x, input)))
 }
-
 get_input_with_fallback <- function(input_id, fallback, input) {
-  # ADD THIS CODE:
   if (validate_input_exists(input_id, input)) {
     return(input[[input_id]])
   }
@@ -431,13 +541,13 @@ get_input_with_fallback <- function(input_id, fallback, input) {
 }
 
 # ====================================================================
-# 5. DYNAMIC UI RENDERING (FIXED ORDER)
+# 5. DYNAMIC UI RENDERING
 # ====================================================================
 
 render_state_selection_ui <- function(input, output) {
   output$state_summary_dynamic <- renderUI({
     if (is.null(input$state_select) || input$state_select == "") {
-      return(div(style = "color: #666; font-size: 12px; margin-top: 10px;",
+      return(div(style = "color: #000000; font-size: 12px; margin-top: 10px;",
                  "Select a western state to begin analysis"))
     }
     
@@ -460,7 +570,7 @@ render_state_selection_ui <- function(input, output) {
                 tags$li(strong(format(round(total_area), big.mark = ",")), " total acres burned"),
                 tags$li("Most common intensity: ", strong(names(sort(intensity_breakdown, decreasing = TRUE))[1]))
         ),
-        div(style = "margin-top: 8px; font-size: 12px; color: #666;",
+        div(style = "margin-top: 8px; font-size: 12px; color: #000000;",
             "Proceed to Step 2 to select fire intensity level.")
     )
   })
@@ -575,7 +685,7 @@ render_filter_options_ui <- function(input, output, values, get_filtered_fire_da
           available_data$fuel_category != ""]))
       
       if (length(fuel_categories) == 0) {
-        return(div(style = "font-size: 12px; color: #666;", "No fuel category data available"))
+        return(div(style = "font-size: 12px; color: #000000;", "No fuel category data available"))
       }
       
       selectInput("fuel_category_filter",
@@ -604,7 +714,7 @@ render_filter_options_ui <- function(input, output, values, get_filtered_fire_da
           available_data$landowner_category != ""]))
       
       if (length(landowner_cats) == 0) {
-        return(div(style = "font-size: 12px; color: #666;", "No landowner data available"))
+        return(div(style = "font-size: 12px; color: #000000;", "No landowner data available"))
       }
       
       selectInput("landowner_category_filter",
@@ -707,10 +817,34 @@ render_fire_selection_ui <- function(input, output, get_available_fire_events) {
                  available_fires$perimeter_count, " perimeters)")
         )
         
-        selectInput("fire_event", 
-                    label = paste("Choose from", nrow(available_fires), "available fires:"),
-                    choices = c("Select a fire event..." = "", fire_choices_with_info),
-                    selected = "")
+        # Multiple selection interface
+        div(
+          h6(paste("Choose from", nrow(available_fires), "available fires:")),
+          p("Select multiple fires to analyze compound fire events!", 
+            style = "font-size: 12px; color: #0066cc; font-weight: bold; margin-bottom: 10px;"),
+          
+          # Multiple selection with checkboxes
+          checkboxGroupInput("fire_events",
+                             label = NULL,
+                             choices = fire_choices_with_info,
+                             selected = NULL),
+          
+          # Quick selection helpers
+          div(style = "margin-top: 10px;",
+              fluidRow(
+                column(6,
+                       actionButton("select_all_fires", "Select All", 
+                                    class = "btn-sm btn-outline-primary", 
+                                    style = "width: 100%;")
+                ),
+                column(6,
+                       actionButton("clear_fire_selection", "Clear All", 
+                                    class = "btn-sm btn-outline-secondary", 
+                                    style = "width: 100%;")
+                )
+              )
+          )
+        )
       }
     }, error = function(e) {
       div(class = "alert alert-danger",
@@ -719,37 +853,119 @@ render_fire_selection_ui <- function(input, output, get_available_fire_events) {
   })
   
   output$selected_fire_summary_dynamic <- renderUI({
-    req(input$fire_event)
+    req(input$fire_events)
     
-    if (input$fire_event == "") return(NULL)
+    if (is.null(input$fire_events) ||
+        length(input$fire_events) == 0) {
+      return(NULL)
+    }
     
     fire_data <- get_available_fire_events()
     
     if (is.null(fire_data) || nrow(fire_data) == 0) {
       div(class = "alert alert-warning", "Selected fire data not available.")
     } else {
-      selected_fire_info <- fire_data %>% filter(attr_IncidentName == input$fire_event)
+      selected_fires_info <- fire_data %>%
+        filter(attr_IncidentName %in% input$fire_events)
       
-      if (nrow(selected_fire_info) > 0) {
-        total_area <- selected_fire_info$total_area[1]
-        perimeter_count <- selected_fire_info$perimeter_count[1]
+      if (nrow(selected_fires_info) > 0) {
+        total_area <- sum(selected_fires_info$total_area)
+        total_perimeters <- sum(selected_fires_info$perimeter_count)
+        num_fires <- length(input$fire_events)
         
-        div(class = "summary-box", style = "background: #d1ecf1; border-color: #bee5eb;",
-            h6(icon("fire-alt"), " Selected Fire: ", strong(input$fire_event)),
-            fluidRow(
-              column(6,
-                     tags$ul(style = "font-size: 12px; margin: 5px 0; padding-left: 15px;",
-                             tags$li("State: ", strong(tools::toTitleCase(input$state_select))),
-                             tags$li("Intensity: ", strong(input$fire_intensity_select)),
-                             tags$li("Total Area: ", strong(format(round(total_area), big.mark = ",")), " acres")
-                     )
-              ),
-              column(6,
-                     tags$ul(style = "font-size: 12px; margin: 5px 0; padding-left: 15px;",
-                             tags$li("Perimeters: ", strong(perimeter_count))
-                     )
+        div(
+          # Fire selection summary
+          div(
+            class = "summary-box",
+            style = "background: #e1f5fe; border-color: #b3e5fc;",
+            h6(
+              icon("fire-alt"),
+              " Selected Fires: ",
+              strong(num_fires),
+              if (num_fires == 1)
+                " fire"
+              else
+                " fires"
+            ),
+            
+            # Show individual fires if reasonable number
+            if (num_fires <= 4) {
+              div(
+                h6("Fire Events:", style = "font-size: 12px; margin: 10px 0 5px 0;"),
+                lapply(input$fire_events, function(fire_name) {
+                  fire_info <- selected_fires_info %>% filter(attr_IncidentName == fire_name)
+                  if (nrow(fire_info) > 0) {
+                    div(
+                      style = "font-size: 11px; margin: 2px 0; padding-left: 10px;",
+                      "🔥 ",
+                      strong(fire_name),
+                      ": ",
+                      format(round(fire_info$total_area[1]), big.mark = ","),
+                      " acres"
+                    )
+                  }
+                })
               )
+            },
+            
+            fluidRow(column(
+              6,
+              tags$ul(
+                style = "font-size: 12px; margin: 5px 0; padding-left: 15px;",
+                tags$li("State: ", strong(
+                  tools::toTitleCase(input$state_select)
+                )),
+                tags$li("Intensity: ", strong(input$fire_intensity_select)),
+                tags$li("Combined Area: ", strong(format(
+                  round(total_area), big.mark = ","
+                )), " acres")
+              )
+            ), column(
+              6,
+              tags$ul(
+                style = "font-size: 12px; margin: 5px 0; padding-left: 15px;",
+                tags$li("Fire Events: ", strong(num_fires)),
+                tags$li("Total Perimeters: ", strong(total_perimeters)),
+                tags$li(
+                  "Analysis Type: ",
+                  strong(if (num_fires == 1)
+                    "Single Fire"
+                    else
+                      "🔥 Compound Event")
+                )
+              )
+            )),
+            
+            # Special note for compound events
+            if (num_fires > 1) {
+              div(
+                style = "margin-top: 10px; padding: 8px; background: #fff8e1; border-radius: 4px; border: 1px solid #ffecb3;",
+                icon("info-circle"),
+                " ",
+                strong("Compound Fire Analysis:"),
+                " This will analyze the combined cascading effects and topological impact of multiple simultaneous fire events."
+              )
+            }
+          ),
+          
+          div(
+            style = "margin-top: 15px; text-align: center;",
+            actionButton(
+              "proceed_to_analysis",
+              paste("Continue with", num_fires, if (num_fires == 1)
+                "Fire"
+                else
+                  "Fires"),
+              class = "btn-success btn-lg",
+              style = "width: 100%; padding: 12px; font-size: 16px; font-weight: bold;",
+              icon = icon("arrow-right")
+            ),
+            
+            p(
+              style = "font-size: 11px; color: #000000; margin-top: 8px;",
+              "Ready to proceed? Click above to start the analysis workflow."
             )
+          )
         )
       }
     }
@@ -757,6 +973,7 @@ render_fire_selection_ui <- function(input, output, get_available_fire_events) {
 }
 
 render_analysis_options_ui <- function(input, output, values, selected_fire) {
+  
   output$cascade_summary_dynamic <- renderUI({
     req(values$enhanced_cascade_results)
     
@@ -793,10 +1010,23 @@ render_analysis_options_ui <- function(input, output, values, selected_fire) {
   output$tda_controls_dynamic <- renderUI({
     req(selected_fire())
     
+    fire_data <- selected_fire()
+    unique_fires <- length(unique(fire_data$attr_IncidentName))
+    is_compound <- unique_fires > 1
+    
+    if (is_compound) {
+      analysis_title <- paste("Complete Grid Topology Analysis (Compound Event:", unique_fires, "Fires)")
+      analysis_description <- paste("Analyze before/after grid topology changes due to compound wildfire impact from", 
+                                    unique_fires, "simultaneous fires using localized TDA.")
+    } else {
+      analysis_title <- "Complete Grid Topology Analysis"
+      analysis_description <- "Analyze before/after grid topology changes due to wildfire impact using localized TDA."
+    }
+    
     div(
-      h6("Complete Grid Topology Analysis"),
-      p("Analyze before/after grid topology changes due to wildfire impact using localized TDA.", 
-        style = "font-size: 12px; color: #666; margin-bottom: 15px;"),
+      h6(analysis_title),
+      p(analysis_description, 
+        style = "font-size: 12px; color: #000000; margin-bottom: 15px;"),
       
       fluidRow(
         column(12,
@@ -806,12 +1036,24 @@ render_analysis_options_ui <- function(input, output, values, selected_fire) {
       ),
       
       div(style = "margin: 10px 0; padding: 8px; background: #f8f9fa; border-radius: 4px;",
-          h6(style = "margin: 0; font-size: 12px; color: #495057;", "Analysis includes:"),
+          h6(style = "margin: 0; font-size: 12px; color: #495057;", 
+             if (is_compound) "Compound Fire Analysis includes:" else "Analysis includes:"),
           tags$ul(style = "font-size: 11px; margin: 5px 0 0 0; padding-left: 20px; color: #6c757d;",
-                  tags$li("Local area topology (before fire)"),
-                  tags$li("Full grid cascade simulation"),
-                  tags$li("Local area topology (after cascade)"),
-                  tags$li("Topological change quantification")
+                  if (is_compound) {
+                    list(
+                      tags$li("Combined impact area topology (before compound fire)"),
+                      tags$li("Full grid cascade simulation (compound fire effects)"),
+                      tags$li("Combined impact area topology (after compound cascade)"),
+                      tags$li("Topological change quantification (compound disturbance)")
+                    )
+                  } else {
+                    list(
+                      tags$li("Local area topology (before fire)"),
+                      tags$li("Full grid cascade simulation"),
+                      tags$li("Local area topology (after cascade)"),
+                      tags$li("Topological change quantification")
+                    )
+                  }
           )
       ),
       
@@ -866,13 +1108,15 @@ render_analysis_options_ui <- function(input, output, values, selected_fire) {
     
     tryCatch({
       fire_data <- selected_fire()
-      fire_name <- unique(fire_data$attr_IncidentName)[1]
+      fire_names <- unique(fire_data$attr_IncidentName)
+      unique_fires <- length(fire_names)
+      is_compound <- unique_fires > 1
       
-      if (is.null(fire_name) || fire_name == "") {
+      if (length(fire_names) == 0 || any(fire_names == "")) {
         div(
           actionButton("run_wildfire_tda", "No Fire Selected", 
                        class = "btn-warning", style = "width: 100%;", disabled = TRUE),
-          div(style = "font-size: 11px; color: #666; margin-top: 5px; text-align: center;",
+          div(style = "font-size: 11px; color: #000000; margin-top: 5px; text-align: center;",
               "Please select a valid fire event first")
         )
       } else {
@@ -883,21 +1127,32 @@ render_analysis_options_ui <- function(input, output, values, selected_fire) {
           div(
             actionButton("run_wildfire_tda", "No Fire Data Available", 
                          class = "btn-warning", style = "width: 100%;", disabled = TRUE),
-            div(style = "font-size: 11px; color: #666; margin-top: 5px; text-align: center;",
+            div(style = "font-size: 11px; color: #000000; margin-top: 5px; text-align: center;",
                 "Selected fire has no polygon data")
           )
         } else {
           # Ready to run analysis
-          button_text <- paste0("Run Complete Analysis: ", fire_name)
-          if (nchar(button_text) > 35) {
-            button_text <- paste0("Run Analysis: ", substr(fire_name, 1, 15), "...")
+          if (is_compound) {
+            button_text <- paste0("Run Compound Analysis: ", unique_fires, " Fires")
+            if (nchar(button_text) > 35) {
+              button_text <- paste0("Run Compound Analysis (", unique_fires, " fires)")
+            }
+            
+            detail_text <- paste0("Analyze ", fire_polygons, " polygons from ", unique_fires, " simultaneous fires")
+          } else {
+            button_text <- paste0("Run Complete Analysis: ", fire_names[1])
+            if (nchar(button_text) > 35) {
+              button_text <- paste0("Run Analysis: ", substr(fire_names[1], 1, 15), "...")
+            }
+            
+            detail_text <- paste0("Analyze ", fire_polygons, " fire polygons")
           }
           
           div(
             actionButton("run_wildfire_tda", button_text, 
                          class = "btn-success", style = "width: 100%;"),
             div(style = "font-size: 11px; color: #666; margin-top: 5px; text-align: center;",
-                paste0("Analyze ", fire_polygons, " fire polygons"))
+                detail_text)
           )
         }
       }
@@ -921,29 +1176,53 @@ render_analysis_options_ui <- function(input, output, values, selected_fire) {
       div(class = "alert alert-danger", style = "padding: 8px; font-size: 12px;",
           icon("times-circle"), " Analysis failed: ", result$error)
     } else {
+      
+      # Determine if this was a compound event
+      is_compound <- if (!is.null(result$is_compound_event)) result$is_compound_event else FALSE
+      fire_count <- if (!is.null(result$fire_count)) result$fire_count else 1
+      
+      if (is_compound) {
+        analysis_type_text <- paste("Compound Event Analysis (", fire_count, " fires)")
+        fire_display_text <- result$compound_fire_names
+        analysis_description <- "Combined cascading effects and topological impact of multiple simultaneous fires"
+      } else {
+        analysis_type_text <- "Single Fire Analysis"  
+        fire_display_text <- result$fire_name
+        analysis_description <- "Before/after topological comparison from single fire impact"
+      }
+      
       div(class = "summary-box", style = "background: #d1ecf1; border-color: #bee5eb;",
           h6(icon("check-circle"), " Complete TDA Analysis Successful"),
+          
+          # Enhanced header for compound events
+          if (is_compound) {
+            div(style = "background: #fff3e0; padding: 8px; border-radius: 4px; margin: 8px 0; border-left: 4px solid #ff9800;",
+                h6(style = "margin: 0; color: #e65100;", 
+                   icon("fire-alt"), " COMPOUND FIRE EVENT ANALYSIS"),
+                p(style = "margin: 4px 0 0 0; font-size: 11px; color: #bf360c;",
+                  "Multi-fire simultaneous impact topology analysis completed"))
+          },
           
           fluidRow(
             column(6,
                    tags$ul(style = "font-size: 11px; margin: 5px 0; padding-left: 15px;",
-                           tags$li("Fire: ", strong(result$fire_name)),
-                           tags$li("Type: ", strong("Localized Analysis"))
+                           tags$li("Fire(s): ", strong(fire_display_text)),
+                           tags$li("Type: ", strong(analysis_type_text))
                    )
             ),
             column(6,
                    tags$ul(style = "font-size: 11px; margin: 5px 0; padding-left: 15px;",
-                           tags$li("Radius: ", strong(result$analysis_radius), " km"),
+                           tags$li("Radius: ", strong(result$analysis_params$analysis_radius_km), " km"),
                            tags$li("Status: ", strong("Complete"))
                    )
             )
           ),
           
-          div(style = "margin-top: 8px; font-size: 11px; color: #666;",
-              "✓ Before/after topology comparison completed"),
+          div(style = "margin-top: 8px; font-size: 11px; color: #000000;",
+              "", analysis_description),
           
-          div(style = "margin-top: 5px; font-size: 11px; color: #666;",
-              "📁 Detailed results saved to outputs directory"),
+          div(style = "margin-top: 5px; font-size: 11px; color: #000000;",
+              "Detailed results saved to outputs directory"),
           
           if (!is.null(result$report_path)) {
             div(style = "margin-top: 8px; text-align: center;",
@@ -953,8 +1232,13 @@ render_analysis_options_ui <- function(input, output, values, selected_fire) {
             )
           },
           
-          div(style = "text-align: center; margin-top: 8px; font-size: 11px; color: #666;",
-              "Full topology analysis including Wasserstein distance calculation.")
+          div(style = "text-align: center; margin-top: 8px; font-size: 11px; color: #000000;",
+              if (is_compound) {
+                "Complete compound fire topology analysis including Wasserstein distance calculation."
+              } else {
+                "Full topology analysis including Wasserstein distance calculation."
+              }
+          )
       )
     }
   })
@@ -967,27 +1251,16 @@ render_analysis_options_ui <- function(input, output, values, selected_fire) {
 
 handle_state_selection <- function(input, session, selected_state) {
   observeEvent(input$state_select, {
-    
     if (!is.null(input$state_select) && input$state_select != "") {
-      # Update the reactive value
+      setup_parallel_processing_safe()
       selected_state(input$state_select)
+      updateSelectInput(session, "fire_intensity_select", selected = "")
+      updateCheckboxGroupInput(session, "fire_events", selected = character(0))
       
-      # Reset downstream selections
-      tryCatch({
-        updateSelectInput(session, "fire_intensity_select", selected = "")
-        updateSelectInput(session, "fire_event", selected = "")
-        updateSelectInput(session, "fuel_type_filter", selected = "")
-        updateSelectInput(session, "fuel_category_filter", selected = "")
-        updateSelectInput(session, "landowner_category_filter", selected = "")
-        updateSelectInput(session, "landowner_type_filter", selected = "")
-        
-        showNotification(
-          paste("Selected state:", tools::toTitleCase(input$state_select)), 
-          type = "message", duration = 3
-        )
-      }, error = function(e) {
-        message("Error in state selection handler: ", e$message)
-      })
+      showNotification(
+        paste("Selected state:", tools::toTitleCase(input$state_select), ". Parallel environment reset."), 
+        type = "message", duration = 4
+      )
     }
   }, ignoreInit = TRUE)
 }
@@ -1000,15 +1273,43 @@ handle_intensity_selection <- function(input, session) {
   })
 }
 
+handle_multiple_fire_selection <- function(input, session, get_available_fire_events) {
+  # Select all fires button
+  observeEvent(input$select_all_fires, {
+    req(input$state_select, input$fire_intensity_select)
+    
+    available_fires <- get_available_fire_events()
+    if (nrow(available_fires) > 0) {
+      all_fire_names <- available_fires$attr_IncidentName
+      updateCheckboxGroupInput(session, "fire_events", selected = all_fire_names)
+      
+      showNotification(
+        paste("Selected all", length(all_fire_names), "fires for compound analysis"), 
+        type = "message", duration = 5
+      )
+    }
+  })
+  
+  # Clear all fires button
+  observeEvent(input$clear_fire_selection, {
+    updateCheckboxGroupInput(session, "fire_events", selected = character(0))
+    showNotification("Fire selection cleared", type = "message", duration = 3)
+  })
+}
+
 handle_filter_changes <- function(input, session) {
+  # Existing filter change logic
   observeEvent(c(input$fire_intensity_select, input$fuel_type_filter, 
                  input$fuel_category_filter, input$landowner_category_filter, 
                  input$landowner_type_filter), {
                    if (!is.null(input$fire_intensity_select) && input$fire_intensity_select != "") {
                      updateSelectInput(session, "fire_event", selected = "")
+                     # Clear multiple selection
+                     updateCheckboxGroupInput(session, "fire_events", selected = character(0))
                    }
                  }, ignoreInit = TRUE)
   
+  # Existing clear filters logic
   observeEvent(input$clear_all_filters, {
     updateSelectInput(session, "fuel_type_filter", selected = "")
     updateSelectInput(session, "fuel_category_filter", selected = "")
@@ -1017,6 +1318,13 @@ handle_filter_changes <- function(input, session) {
     
     showNotification("All filters cleared", type = "message", duration = 3)
   })
+  
+  # Auto-clear fire selection when state/intensity changes
+  observeEvent(c(input$state_select, input$fire_intensity_select), {
+    updateCheckboxGroupInput(session, "fire_events", selected = character(0))
+    # Also clear legacy single selection
+    updateSelectInput(session, "fire_event", selected = "")
+  }, ignoreInit = TRUE)
 }
 
 handle_fire_selection <- function(input, selected_fire) {
@@ -1025,185 +1333,432 @@ handle_fire_selection <- function(input, selected_fire) {
 
 handle_cascade_execution <- function(input, values, selected_fire, session) {
   observeEvent(input$run_cascade, {
+    # Check connection status before running
+    connection_count <- monitor_connections()
+    if (connection_count > 10) {
+      message("High connection count detected, cleaning up...")
+      cleanup_parallel_resources(force_cleanup = TRUE)
+      Sys.sleep(0.5)
+    }
+    
     shinyjs::runjs("
       var btn = document.getElementById('run_cascade');
       if (btn) btn.setAttribute('data-clicked', 'true');
     ")
     req(selected_fire(), input$buffer_km, values$system_ready)
     
-    withProgress(message = 'Running enhanced cascade simulation...', {
+    withProgress(message = 'Running SAFE cascade simulation...', {
       
       tryCatch({
         fire_data <- selected_fire()
+        fire_name <- unique(fire_data$attr_IncidentName)[1]
         
-        # Validate fire data
+        # Validate data (same as before)
         fire_validation <- validate_fire_data(fire_data)
         if (!fire_validation$valid) {
-          showNotification(paste("Fire data error:", fire_validation$error), 
-                           type = "error", duration = 10)
+          showNotification(
+            div(
+              h5("Fire Data Error"),
+              p(fire_validation$error),
+              div(style = "text-align: center; margin-top: 10px;",
+                  actionButton("dismiss_fire_error", "Try Different Fire", class = "btn-warning btn-sm")
+              )
+            ), 
+            type = "error", duration = 15, closeButton = TRUE
+          )
           return()
         }
         
-        # Validate bus data
         bus_validation <- validate_bus_data(buses_sf)
         if (!bus_validation$valid) {
-          showNotification(paste("Bus data error:", bus_validation$error), 
-                           type = "error", duration = 10)
+          showNotification(
+            div(
+              h5("Bus Data Error"),  
+              p(bus_validation$error),
+              p("This is a system configuration issue. Please check your data loading."),
+              div(style = "text-align: center; margin-top: 10px;",
+                  actionButton("dismiss_bus_error", "OK", class = "btn-danger btn-sm")
+              )
+            ), 
+            type = "error", duration = 15, closeButton = TRUE
+          )
           return()
         }
         
-        message("Starting cascade simulation with:")
-        message("  Fire: ", unique(fire_data$attr_IncidentName)[1])
-        message("  Fire polygons: ", nrow(fire_data))
-        message("  Buffer: ", input$buffer_km, " km")
-        message("  Max steps: ", cfg$simulation_steps)
-        
-        # Run enhanced fire cascade
-        result <- run_enhanced_fire_cascade(
-          graph = graph_original,
-          buses_sf = buses_sf,
-          fire_data = fire_data,
-          buffer_km = input$buffer_km,
-          steps = cfg$simulation_steps
-        )
-        
+        message("Starting SAFE cascade simulation:")
+        message("Fire: ", fire_name)
+        message("Fire polygons: ", nrow(fire_data))
+        message("Buffer: ", input$buffer_km, " km")
+        message("Max steps: ", cfg$simulation_steps)
+        # Update progress
+        incProgress(0.1, detail = "Setting up safe parallel processing...")
+        setup_parallel_processing_safe(max_workers = 4)
+        incProgress(0.2, detail = "Running cascade simulation...")
+        result <- tryCatch({
+          run_enhanced_fire_cascade(
+            graph = graph_original,
+            buses_sf = buses_sf,
+            fire_data = fire_data,
+            buffer_km = input$buffer_km,
+            steps = cfg$simulation_steps,
+            use_parallel = TRUE,
+            parallel_method = "multisession"
+          )
+        }, error = function(e) {
+          message("Parallel cascade error: ", e$message)
+          # Try cleanup and retry once
+          cleanup_parallel_resources(force_cleanup = TRUE)
+          Sys.sleep(1)
+          message("Retrying with sequential processing...")
+          run_enhanced_fire_cascade(
+            graph = graph_original,
+            buses_sf = buses_sf,
+            fire_data = fire_data,
+            buffer_km = input$buffer_km,
+            steps = cfg$simulation_steps,
+            use_parallel = FALSE
+          )
+        })
+        # Check if result indicates failure
+        if (!is.null(result$success) && !result$success) {
+          stop(result$error)
+        }
+        incProgress(0.6, detail = "Processing results...")
+        # Tag results for TDA compatibility
+        result$fire_name <- fire_name
+        result$buffer_km <- input$buffer_km
+        result$timestamp <- Sys.time()
+        result$parallel_used <- TRUE
         values$cascade_results <- result
         values$enhanced_cascade_results <- result
-        
+        incProgress(0.8, detail = "Updating interface...")
         # Update slider
         max_steps <- min(length(result$graphs) - 1, cfg$simulation_steps)
         updateSliderInput(session, "step", min = 1, max = max_steps, value = 1)
-        
-        # Show success notification
+        incProgress(1.0, detail = "Complete!")
+        # Clean up connections after successful completion
+        connection_count_after <- monitor_connections()
+        if (connection_count_after > connection_count + 5) {
+          message("Connection count increased significantly, cleaning up...")
+          cleanup_parallel_resources()
+        }
+        # Success notification
         total_affected <- sum(sapply(result$buses_lost_per_step, length))
         final_buses <- vcount(result$graphs[[length(result$graphs)]])
         
         showNotification(
-          paste0("✓ Cascade simulation complete! ", 
-                 total_affected, " buses affected. ",
-                 final_buses, " buses remain active."),
-          type = "message", 
-          duration = 8
+          div(
+            h5("Cascade Complete!"),
+            p("Fire: ", strong(fire_name)),
+            p("Buffer: ", strong(input$buffer_km), " km"),
+            p("Buses Affected: ", strong(total_affected)),
+            p("Final Grid Size: ", strong(final_buses), " buses"),
+            br(),
+            div(style = "text-align: center;",
+                actionButton("run_tda_after_cascade", "Run TDA Analysis",
+                             class = "btn-success", 
+                             onclick = "document.getElementById('run_wildfire_tda').click();")
+            )
+          ),
+          type = "message",
+          duration = 15,
+          closeButton = TRUE
         )
         
       }, error = function(e) {
+        # Clean up on error
+        cleanup_parallel_resources(force_cleanup = TRUE)
+        
         showNotification(
-          paste0("✗ Cascade simulation failed: ", e$message),
+          div(
+            h5("Cascade Simulation Failed"),
+            p("Fire: ", if(exists("fire_name")) fire_name else "Unknown"),
+            p("Error: ", e$message),
+            br(),
+            p("This may be due to connection issues when switching states quickly."),
+            p("Try waiting a moment and running the analysis again."),
+            br(),
+            div(style = "text-align: center;",
+                actionButton("retry_cascade", "Retry Analysis", 
+                             class = "btn-warning")
+            )
+          ),
           type = "error", 
-          duration = 15
+          duration = 20,
+          closeButton = TRUE
         )
         message("Cascade error details: ", e$message)
-        
-        if (exists("debug_cascade_setup")) {
-          message("Running debug analysis...")
-          debug_cascade_setup(graph_original, buses_sf, selected_fire(), input$buffer_km)
-        }
       })
     })
   })
 }
 
-handle_tda_analysis <- function(input, values, selected_fire) {
+
+render_parameter_explanation_ui <- function(input, output) {
+  output$parameter_explanation_dynamic <- renderUI({
+    div(class = "summary-box", style = "background: #f8f9fa; border-color: #dee2e6;",
+        h6(icon("question-circle"), " Parameter Guide"),
+        
+        div(style = "margin-bottom: 10px;",
+            strong("Impact Buffer (", if (!is.null(input$buffer_km)) paste0(input$buffer_km, " km") else "2 km", "):"),
+            br(),
+            "Determines which buses are directly affected by fire during cascade simulation.",
+            br(),
+            span("Smaller values = more localized fire impact", style = "font-size: 11px; color: #329ea8;")
+        ),
+        
+        div(style = "margin-bottom: 10px;",
+            strong("Analysis Radius (", if (!is.null(input$proximity_km)) paste0(input$proximity_km, " km") else "30 km", "):"),
+            br(),
+            "Defines the area around fire for topological analysis (TDA scope).",
+            br(),
+            span("Larger values = broader topology analysis", style = "font-size: 11px; color: #281e87;")
+        ),
+        
+        if (!is.null(input$buffer_km) && !is.null(input$proximity_km)) {
+          if (input$proximity_km < input$buffer_km) {
+            div(class = "alert alert-warning", style = "padding: 5px; margin-top: 10px; font-size: 11px;",
+                icon("exclamation-triangle"), 
+                " Analysis radius is smaller than impact buffer. Consider increasing analysis radius.")
+          } else {
+            div(style = "color: #28a745; font-size: 11px; margin-top: 10px;",
+                icon("check-circle"), " Parameters are well-configured.")
+          }
+        }
+    )
+  })
+}
+clean_duplicate_data <- function() {
+  message("Cleaning duplicate data entries...")
+  
+  # Clean bus data duplicates
+  if (exists("bus_info") && nrow(bus_info) > 0) {
+    original_count <- nrow(bus_info)
+    bus_info <<- bus_info %>% distinct(bus_i, .keep_all = TRUE)
+    if (nrow(bus_info) < original_count) {
+      message("  Removed ", original_count - nrow(bus_info), " duplicate bus entries")
+    }
+  }
+  
+  # Clean branch data duplicates
+  if (exists("branch_info") && nrow(branch_info) > 0) {
+    original_count <- nrow(branch_info)
+    branch_info <<- branch_info %>% distinct(b1, b2, .keep_all = TRUE)
+    if (nrow(branch_info) < original_count) {
+      message("  Removed ", original_count - nrow(branch_info), " duplicate branch entries")
+    }
+  }
+  
+  message("✓ Data cleaning complete")
+}
+
+handle_tda_analysis <- function(input, values, selected_fire, session) {
   observeEvent(input$run_wildfire_tda, {
     req(selected_fire(), values$system_ready)
-    
     fire_data <- selected_fire()
-    fire_name <- unique(fire_data$attr_IncidentName)[1]
-    
-    # Get analysis parameters from UI
-    analysis_radius <- if (!is.null(input$proximity_km)) input$proximity_km else 5
-    
+    fire_names <- unique(fire_data$attr_IncidentName)
+    is_compound_event <- length(fire_names) > 1
+    if (is_compound_event) {
+      fire_display_text <- paste("Compound Event:", length(fire_names), "fires")
+      fire_detail_text <- paste("Fires:", paste(fire_names, collapse = ", "))
+      analysis_type <- "COMPOUND FIRE EVENT"
+    } else {
+      fire_display_text <- fire_names[1]
+      fire_detail_text <- paste("Single fire:", fire_names[1])
+      analysis_type <- "SINGLE FIRE EVENT"
+    }
+    # Get parameters from UI
+    analysis_radius <- if (!is.null(input$proximity_km)) input$proximity_km else 30
+    fire_buffer <- if (!is.null(input$buffer_km)) input$buffer_km else 2
+    # Check if cascade results exist and match current parameters
+    cascade_available <- !is.null(values$enhanced_cascade_results)
+    cascade_compatible <- FALSE
+    if (cascade_available) {
+      existing_buffer <- if (!is.null(values$enhanced_cascade_results$buffer_km)) {
+        values$enhanced_cascade_results$buffer_km
+      } else {
+        NA
+      }
+      existing_fire_names <- if (!is.null(values$enhanced_cascade_results$fire_name)) {
+        # Handle both single names and compound names
+        if (grepl("\\+", values$enhanced_cascade_results$fire_name)) {
+          # Split compound names
+          trimws(strsplit(values$enhanced_cascade_results$fire_name, "\\+")[[1]])
+        } else {
+          values$enhanced_cascade_results$fire_name
+        }
+      } else {
+        NA
+      }
+      cascade_compatible <- (!any(is.na(existing_fire_names)) && 
+                               length(setdiff(fire_names, existing_fire_names)) == 0 &&
+                               length(setdiff(existing_fire_names, fire_names)) == 0) &&
+        (!is.na(existing_buffer) && existing_buffer == fire_buffer)
+    }
     showModal(modalDialog(
-      title = paste("Running Complete TDA Workflow for", fire_name),
+      title = paste("TDA Analysis Running -", analysis_type),
       div(
-        h5("Localized Grid Resilience Analysis"),
-        p("This analysis will:"),
-        tags$ul(
-          tags$li("Define local area around the fire (", analysis_radius, " km radius)"),
-          tags$li("Analyze healthy grid topology in the local area"),
-          tags$li("Run full cascade simulation on the entire grid"),
-          tags$li("Analyze damaged grid topology in the local area"),
-          tags$li("Compare topological changes using Wasserstein distance")
+        # Enhanced fire information display
+        div(style = "background: #e3f2fd; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
+            h5(style = "margin: 0 0 8px 0; color: #1565c0;", 
+               icon(if(is_compound_event) "fire-alt" else "fire"), 
+               " ", fire_display_text),
+            p(style = "margin: 0; font-size: 13px; color: #424242;", fire_detail_text),
+            if (is_compound_event) {
+              div(style = "margin-top: 8px; padding: 6px; background: #fff3e0; border-radius: 4px;",
+                  p(style = "margin: 0; font-size: 12px; color: #e65100; font-weight: bold;",
+                    "COMPOUND EVENT: Analyzing combined cascading effects of multiple simultaneous fires"))
+            }
         ),
-        br(),
-        div(id = "tda-progress", 
-            div(class = "progress", 
-                div(class = "progress-bar progress-bar-striped progress-bar-animated", 
-                    role = "progressbar", style = "width: 100%", "Running analysis...")
-            )
+        div(style = "background: #f5f5f5; padding: 10px; border-radius: 4px; margin-bottom: 15px;",
+            h6(style = "margin: 0 0 8px 0;", "Analysis Parameters:"),
+            fluidRow(
+              column(6,
+                     p(style = "margin: 0; font-size: 12px;", 
+                       strong("Analysis Radius: "), analysis_radius, " km")
+              ),
+              column(6,
+                     p(style = "margin: 0; font-size: 12px;", 
+                       strong("Fire Buffer: "), fire_buffer, " km")
+              )
+            ),
+            if (cascade_compatible) {
+              p(style = "margin: 8px 0 0 0; font-size: 11px; color: #2e7d32;",
+                "Using existing compatible cascade results")
+            } else {
+              p(style = "margin: 8px 0 0 0; font-size: 11px; color: #d84315;",
+                "Will run new cascade simulation")
+            }
+        ),
+        
+        # Progress indicator
+        div(class = "progress", style = "margin-bottom: 15px;",
+            div(class = "progress-bar progress-bar-striped progress-bar-animated", 
+                role = "progressbar", style = "width: 100%", 
+                if (is_compound_event) "Analyzing compound fire topology..." else "Running analysis...")
+        ),
+        
+        # Detailed status
+        div(style = "font-size: 12px; color: #666;",
+            if (is_compound_event) {
+              div(
+                p("Phase 1: Combined fire impact analysis"),
+                p("Phase 2: Multi-fire cascade simulation"),  
+                p("Phase 3: Compound topology comparison"),
+                p("Phase 4: Enhanced visualization generation")
+              )
+            } else {
+              div(
+                p("Phase 1: Fire impact analysis"),
+                p("Phase 2: Cascade simulation"),
+                p("Phase 3: Before/after topology comparison"), 
+                p("Phase 4: Visualization generation")
+              )
+            },
+            br(),
+            p(strong("This may take several minutes. Please wait..."), style = "text-align: center;")
         )
       ),
       footer = tagList(
-        modalButton("Running...") 
+        modalButton("Cancel Analysis")
       ),
-      easyClose = FALSE
+      easyClose = FALSE,
+      size = "l"
     ))
-    
-    # Run the complete TDA workflow
+    # Run analysis in the background
     tryCatch({
-      analysis_results <- run_full_tda_workflow(
+      analysis_results <- run_smart_tda_workflow(
         fire_data = fire_data,
-        bus_info = bus_info,  # Use the global bus_info object
+        bus_info = buses_sf,
         graph_original = graph_original,
-        analysis_radius_miles = analysis_radius * 0.621371,  # Convert km to miles
-        simulation_steps = cfg$simulation_steps
+        analysis_radius_km = analysis_radius,
+        fire_impact_buffer_km = fire_buffer,
+        simulation_steps = cfg$simulation_steps,
+        use_existing_cascade = cascade_compatible,
+        existing_cascade_results = if (cascade_compatible) values$enhanced_cascade_results else NULL,
+        generate_plots = TRUE,
+        display_plots = TRUE
       )
-      
       removeModal()
-      
       if (analysis_results$success) {
-        # Store comprehensive results for UI display
-        values$tda_results <- list(
-          success = TRUE,
-          fire_name = fire_name,
-          analysis_type = "Localized Grid Topology Analysis",
-          report_path = analysis_results$report_path,
-          analysis_radius = analysis_radius,
-          matrix_size = "Local area analysis",
-          
-          # Create a simple diagram for plotting (since we don't have direct access to the detailed results)
-          diagram = data.frame(
-            Dimension = c(0, 0, 1, 1),
-            Birth = c(0.1, 0.2, 0.3, 0.4),
-            Death = c(0.8, 0.9, 0.7, 0.6)
-          )
-        )
-        
+        values$tda_results <- analysis_results
+        if (!cascade_compatible && !is.null(analysis_results$cascade_results)) {
+          values$enhanced_cascade_results <- analysis_results$cascade_results
+          if (!is.null(analysis_results$cascade_results$metrics)) {
+            max_steps <- nrow(analysis_results$cascade_results$metrics)
+            updateSliderInput(session, "step", min = 1, max = max_steps, value = 1)
+          }
+        }
         showNotification(
           div(
-            h5("✓ Complete TDA Analysis Successful!"),
-            p("Fire: ", strong(fire_name)),
-            p("Analysis report saved to: ", basename(dirname(analysis_results$report_path))),
-            p("Check the outputs directory for detailed results.")
+            h5(paste("TDA Analysis Complete!", 
+                     if(is_compound_event) paste("(", analysis_type, ")") else "")),
+            # Fire information section
+            div(style = "background: #e8f5e8; padding: 8px; border-radius: 4px; margin: 8px 0;",
+                if (is_compound_event) {
+                  div(
+                    p(style = "margin: 0; font-weight: bold;", 
+                      "Compound Fire Event: ", length(fire_names), " fires analyzed"),
+                    p(style = "margin: 2px 0 0 0; font-size: 11px;", 
+                      "Fires: ", paste(fire_names, collapse = ", "))
+                  )
+                } else {
+                  p(style = "margin: 0; font-weight: bold;", 
+                    "Fire: ", strong(fire_names[1]))
+                }
+            ),
+            # Results summary
+            fluidRow(
+              column(6,
+                     p(style = "margin: 2px 0; font-size: 12px;",
+                       "Features Before: ", analysis_results$before_features),
+                     p(style = "margin: 2px 0; font-size: 12px;",
+                       "Features After: ", analysis_results$after_features)
+              ),
+              column(6,
+                     p(style = "margin: 2px 0; font-size: 12px;",
+                       "Wasserstein Distance: ", round(analysis_results$wasserstein_distance, 4)),
+                     p(style = "margin: 2px 0; font-size: 12px;",
+                       "Analysis Type: ", if(is_compound_event) "Compound" else "Single")
+              )
+            ),
+            
+            br(),
+            p("Check the Plots tab in RStudio for visualizations!", 
+              style = "color: #28a745; font-weight: bold; text-align: center;"),
+            
+            if (is_compound_event) {
+              div(style = "margin-top: 8px; padding: 6px; background: #fff3e0; border-radius: 4px;",
+                  p(style = "margin: 0; font-size: 11px; color: #e65100;",
+                    "Commpound fire topology analysis captures simultaneous multi-fire disturbance patterns"))
+            }
           ),
           type = "message", 
-          duration = 10
-        )
-        
-        # Show additional info notification
-        showNotification(
-          paste0("📊 Detailed results available in: outputsAttacked/", 
-                 basename(dirname(analysis_results$report_path))),
-          type = "message", 
-          duration = 15
+          duration = 25,  # Longer for compound events
+          closeButton = TRUE
         )
         
       } else {
         values$tda_results <- list(
           success = FALSE, 
           error = analysis_results$error,
-          fire_name = fire_name
+          fire_name = fire_display_text,
+          is_compound_event = is_compound_event
         )
         
         showNotification(
           div(
-            h5("✗ TDA Analysis Failed"),
-            p("Fire: ", strong(fire_name)),
+            h5("TDA Analysis Failed"),
+            p("Fire(s): ", strong(fire_display_text)),
+            if (is_compound_event) {
+              p("Event Type: ", strong("Compound Event (", length(fire_names), " fires)"))
+            },
             p("Error: ", analysis_results$error),
-            p("Please check your data and try again.")
+            p("Check the console for more details.")
           ),
           type = "error", 
-          duration = 15
+          duration = 15,
+          closeButton = TRUE
         )
       }
       
@@ -1212,32 +1767,32 @@ handle_tda_analysis <- function(input, values, selected_fire) {
       
       values$tda_results <- list(
         success = FALSE, 
-        error = paste("Analysis error:", e$message),
-        fire_name = fire_name
+        error = paste("analysis error:", e$message),
+        fire_name = fire_display_text,
+        is_compound_event = is_compound_event
       )
       
       showNotification(
         div(
-          h5("✗ Critical Analysis Error"),
-          p("Fire: ", strong(fire_name)),
-          p("Error: ", e$message),
-          p("Please check the console for details.")
+          h5("Critical Analysis Error"),
+          p("Fire(s): ", strong(fire_display_text)),
+          if (is_compound_event) {
+            p("Event Type: ", strong("Compound Event"))
+          },
+          p("Error: ", e$message)
         ),
         type = "error", 
-        duration = 20
+        duration = 15,
+        closeButton = TRUE
       )
       
-      # Log the full error for debugging
       message("TDA Analysis Error Details:")
-      message("Fire: ", fire_name)
+      message("Fire(s): ", fire_display_text)
+      message("Is compound: ", is_compound_event)
       message("Error: ", e$message)
-      if (!is.null(e$call)) {
-        message("Call: ", deparse(e$call))
-      }
     })
   })
 }
-
 # ====================================================================
 # 7. OBSERVER MANAGEMENT
 # ====================================================================
@@ -1245,8 +1800,7 @@ setup_initialization_observers <- function(values) {
   observe({
     tryCatch({
       if (is.null(values$initial_edges_sf)) {
-        # FIXED: Use the correct function name and parameters
-        values$initial_edges_sf <- prepare_edges_sf(graph_original, bus_info)  # Use bus_info instead of bus_data
+        values$initial_edges_sf <- prepare_edges_sf(graph_original, bus_info)
         if (!is.null(values$initial_edges_sf)) {
           message("Initial edges prepared: ", nrow(values$initial_edges_sf), " edges")
         } else {
@@ -1276,7 +1830,7 @@ prepare_edges_sf <- function(graph = NULL, bus_coord_data = NULL) {
     if (exists("graph_original")) graph_original else NULL
   }
   
-  # Use provided bus data or try defaults - FIXED: Use bus_info as primary
+  # Use provided bus data or try defaults
   coord_data <- if (!is.null(bus_coord_data)) bus_coord_data else {
     if (exists("bus_info")) bus_info else if (exists("buses_sf")) buses_sf else NULL
   }
@@ -1306,18 +1860,21 @@ prepare_edges_sf <- function(graph = NULL, bus_coord_data = NULL) {
         longitude = coords_matrix[, "X"],
         latitude = coords_matrix[, "Y"]
       ) %>%
-        filter(!is.na(longitude), !is.na(latitude))
+        filter(!is.na(longitude), !is.na(latitude)) %>%
+        distinct(bus_i, .keep_all = TRUE)
     } else {
       # Handle different column names for coordinates
       if ("longitude" %in% names(coord_data) && "latitude" %in% names(coord_data)) {
         coords <- coord_data %>% 
           select(bus_i, longitude, latitude) %>%
-          filter(!is.na(longitude), !is.na(latitude))
+          filter(!is.na(longitude), !is.na(latitude)) %>%
+          distinct(bus_i, .keep_all = TRUE)
       } else if ("lon" %in% names(coord_data) && "lat" %in% names(coord_data)) {
         coords <- coord_data %>% 
           select(bus_i, lon, lat) %>%
           rename(longitude = lon, latitude = lat) %>%
-          filter(!is.na(longitude), !is.na(latitude))
+          filter(!is.na(longitude), !is.na(latitude)) %>%
+          distinct(bus_i, .keep_all = TRUE)
       } else {
         message("Could not find coordinate columns in bus data")
         return(NULL)
@@ -1334,9 +1891,10 @@ prepare_edges_sf <- function(graph = NULL, bus_coord_data = NULL) {
         from_bus = as.integer(from), 
         to_bus = as.integer(to)
       ) %>%
-      left_join(coords, by = c("from_bus" = "bus_i")) %>%
+      distinct(from_bus, to_bus, .keep_all = TRUE) %>%
+      left_join(coords, by = c("from_bus" = "bus_i"), relationship = "many-to-one") %>%
       rename(lon_from = longitude, lat_from = latitude) %>%
-      left_join(coords, by = c("to_bus" = "bus_i")) %>%
+      left_join(coords, by = c("to_bus" = "bus_i"), relationship = "many-to-one") %>%
       rename(lon_to = longitude, lat_to = latitude) %>%
       filter(!is.na(lon_from), !is.na(lat_from), !is.na(lon_to), !is.na(lat_to))
     
@@ -1366,7 +1924,7 @@ prepare_edges_sf <- function(graph = NULL, bus_coord_data = NULL) {
   })
 }
 
-setup_data_observers <- function(input, values, session) {  # ADD session
+setup_data_observers <- function(input, values, session) {
   # Update analysis step slider when cascade completes
   observe({
     if (!is.null(values$cascade_results)) {
@@ -1390,7 +1948,7 @@ setup_ui_update_observers <- function(input, output, session) {
 }
 
 setup_map_observers <- function(input, values, selected_fire, selected_state, session) {
-  # Map click handler - FIXED to properly handle selected_state
+  # Map click handler
   observeEvent(input$map_shape_click, {
     click <- input$map_shape_click
     if (!is.null(click$id) && click$id %in% cfg$western_states) {
@@ -1409,123 +1967,185 @@ setup_map_observers <- function(input, values, selected_fire, selected_state, se
       }
     }
   })
-  
-  # Fire display observer - FIXED to handle missing fire data gracefully
   observe({
     req(values$system_ready)
     
+    # Only proceed if fires should be shown
     if (is.null(input$show_fires) || !input$show_fires) {
+      # If fires shouldn't be shown, clear fire groups
+      leafletProxy("map") %>% 
+        clearGroup("fire_perimeters") %>%
+        clearGroup("fire_centers") %>%
+        clearGroup("impact_zones")
+      return()
+    }
+    
+    # Only proceed if we have a selected fire
+    fire_data <- tryCatch({
+      selected_fire()
+    }, error = function(e) {
+      message("Error accessing selected fire in observer: ", e$message)
+      return(NULL)
+    })
+    
+    if (is.null(fire_data) || !inherits(fire_data, "sf") || nrow(fire_data) == 0) {
+      # Clear fire groups if no data
+      leafletProxy("map") %>% 
+        clearGroup("fire_perimeters") %>%
+        clearGroup("fire_centers") %>%
+        clearGroup("impact_zones")
       return()
     }
     
     tryCatch({
-      fire_data <- selected_fire()
-      
-      if (is.null(fire_data) || !inherits(fire_data, "sf") || nrow(fire_data) == 0) {
-        return()
-      }
-      
       proxy <- leafletProxy("map") %>% 
         clearGroup("fire_perimeters") %>%
         clearGroup("fire_centers") %>%
         clearGroup("impact_zones")
       
-      # Get safe_remove_legend from parent environment
-      if (exists("safe_remove_legend", envir = parent.frame())) {
-        safe_remove_legend <- get("safe_remove_legend", envir = parent.frame())
-        proxy <- safe_remove_legend(proxy, "fire_legend")
-        proxy <- safe_remove_legend(proxy, "fuel_legend") 
-        proxy <- safe_remove_legend(proxy, "landowner_legend")
-      }
+      # Remove existing fire legends
+      tryCatch({
+        proxy <- proxy %>% 
+          removeControl(layerId = "fire_legend") %>%
+          removeControl(layerId = "fuel_legend") %>%
+          removeControl(layerId = "landowner_legend")
+      }, error = function(e) {
+        # Ignore legend removal errors
+      })
       
+      # Validate and fix geometries
       if (any(!st_is_valid(fire_data))) {
         fire_data <- st_make_valid(fire_data)
       }
       
-      color_mode <- if (!is.null(input$fire_color_mode)) {
-        input$fire_color_mode
-      } else {
-        "intensity"
-      }
+      unique_fires <- length(unique(fire_data$attr_IncidentName))
+      is_compound_event <- unique_fires > 1
       
-      # Apply appropriate coloring
+      # Get color mode safely
+      color_mode <- tryCatch({
+        if (!is.null(input$fire_color_mode)) {
+          input$fire_color_mode
+        } else {
+          "intensity"
+        }
+      }, error = function(e) {
+        "intensity"
+      })
+  
+      fire_data <- fire_data %>%
+        mutate(
+          # Ensure required columns exist with defaults
+          attr_IncidentName = ifelse(is.na(attr_IncidentName) | attr_IncidentName == "", 
+                                     "Unknown Fire", as.character(attr_IncidentName)),
+          fire_intensity = ifelse(is.na(fire_intensity) | fire_intensity == "", 
+                                  "Unknown", as.character(fire_intensity)),
+          fire_acres = ifelse(is.na(fire_acres), 0, as.numeric(fire_acres)),
+          
+          # Create popup text using case_when for proper vectorization
+          popup_text = case_when(
+            is_compound_event ~ paste0("Compound Fire Event<br>",
+                                       "Fire: ", attr_IncidentName, "<br>",
+                                       "Event fires: ", unique_fires, "<br>",
+                                       "This fire area: ", round(fire_acres), " acres<br>",
+                                       "Intensity: ", fire_intensity),
+            TRUE ~ paste0("Fire: ", attr_IncidentName, "<br>",
+                          "Intensity: ", fire_intensity, "<br>",
+                          "Area: ", round(fire_acres), " acres")
+          )
+        )
+      
+      message("Adding fire data to map: ", nrow(fire_data), " polygons")
+      message("Color mode: ", color_mode)
+      message("Is compound event: ", is_compound_event)
+      
+      # Apply appropriate coloring with enhanced popup
       if (color_mode == "attr_PrimaryFuelModel" && exists("fuel_category_pal")) {
         tryCatch({
-          proxy %>%
-            addPolygons(
-              data = fire_data,
-              group = "fire_perimeters",
-              color = ~fuel_category_pal(fuel_category), 
-              weight = 2, 
-              fillOpacity = 0.4,
-              popup = ~paste0("Fire: ", attr_IncidentName, "<br>",
-                              "Fuel Category: ", fuel_category, "<br>",
-                              "Area: ", round(fire_acres), " acres<br>",
-                              "Intensity: ", fire_intensity)
-            ) %>%
-            addLegend("topleft", 
-                      pal = fuel_category_pal, 
-                      values = fire_data$fuel_category, 
-                      title = "Fuel Category",
-                      layerId = "fuel_legend")
-        }, error = function(e) {
-          message("Error adding fuel category polygons: ", e$message)
-        })
-        
-      } else if (color_mode == "attr_POOLandownerCategory" && exists("attr_POOLandownerCategory_pal")) {
-        tryCatch({
-          proxy %>%
-            addPolygons(
-              data = fire_data,
-              group = "fire_perimeters", 
-              color = ~attr_POOLandownerCategory_pal(landowner_category),
-              weight = 2,
-              fillOpacity = 0.4,
-              popup = ~paste0("Fire: ", attr_IncidentName, "<br>",
-                              "Landowner: ", landowner_category, "<br>",
-                              "Area: ", round(fire_acres), " acres<br>",
-                              "Intensity: ", fire_intensity)
-            ) %>%
-            addLegend("topleft",
-                      pal = attr_POOLandownerCategory_pal,
-                      values = fire_data$landowner_category,
-                      title = "Landowner Category", 
-                      layerId = "landowner_legend")
-        }, error = function(e) {
-          message("Error adding landowner category polygons: ", e$message)
-        })
-        
-      } else {
-        # Default intensity coloring
-        if (exists("fire_intensity_pal")) {
-          tryCatch({
-            proxy %>%
+          if (!"fuel_category" %in% names(fire_data)) {
+            message("fuel_category column not found, using default coloring")
+            color_mode <- "intensity"
+          } else {
+            proxy <- proxy %>%
               addPolygons(
                 data = fire_data,
                 group = "fire_perimeters",
-                color = ~fire_intensity_pal(fire_intensity), 
-                weight = 2, 
-                fillOpacity = 0.4,
-                popup = ~paste0("Fire: ", attr_IncidentName, "<br>",
-                                "Intensity: ", fire_intensity, "<br>",
-                                "Area: ", round(fire_acres), " acres")
+                color = ~fuel_category_pal(fuel_category), 
+                weight = if (is_compound_event) 3 else 2,
+                fillOpacity = if (is_compound_event) 0.5 else 0.4,
+                popup = ~popup_text
               ) %>%
               addLegend("topleft", 
-                        pal = fire_intensity_pal, 
-                        values = fire_data$fire_intensity, 
-                        title = "Fire Intensity",
-                        layerId = "fire_legend")
-          }, error = function(e) {
-            message("Error adding intensity polygons: ", e$message)
-          })
-        }
+                        pal = fuel_category_pal, 
+                        values = fire_data$fuel_category, 
+                        title = if (is_compound_event) "Fuel Category (Compound)" else "Fuel Category",
+                        layerId = "fuel_legend")
+            message("Added fuel category polygons to map")
+            return()
+          }
+        }, error = function(e) {
+          message("Error adding fuel category polygons: ", e$message)
+          color_mode <- "intensity"
+        })
+      }
+      
+      if (color_mode == "attr_POOLandownerCategory" && exists("attr_POOLandownerCategory_pal")) {
+        tryCatch({
+          if (!"landowner_category" %in% names(fire_data)) {
+            message("landowner_category column not found, using default coloring")
+            color_mode <- "intensity"
+          } else {
+            proxy <- proxy %>%
+              addPolygons(
+                data = fire_data,
+                group = "fire_perimeters", 
+                color = ~attr_POOLandownerCategory_pal(landowner_category),
+                weight = if (is_compound_event) 3 else 2,
+                fillOpacity = if (is_compound_event) 0.5 else 0.4,
+                popup = ~popup_text
+              ) %>%
+              addLegend("topleft",
+                        pal = attr_POOLandownerCategory_pal,
+                        values = fire_data$landowner_category,
+                        title = if (is_compound_event) "Landowner (Compound)" else "Landowner Category", 
+                        layerId = "landowner_legend")
+            message("Added landowner category polygons to map")
+            return()
+          }
+        }, error = function(e) {
+          message("Error adding landowner category polygons: ", e$message)
+          color_mode <- "intensity"
+        })
+      }
+      
+      # Default intensity coloring with compound event styling
+      if (exists("fire_intensity_pal")) {
+        tryCatch({
+          proxy <- proxy %>%
+            addPolygons(
+              data = fire_data,
+              group = "fire_perimeters",
+              color = ~fire_intensity_pal(fire_intensity), 
+              weight = if (is_compound_event) 3 else 2,
+              fillOpacity = if (is_compound_event) 0.5 else 0.4,
+              popup = ~popup_text
+            ) %>%
+            addLegend("topleft", 
+                      pal = fire_intensity_pal, 
+                      values = fire_data$fire_intensity, 
+                      title = if (is_compound_event) "Fire Intensity (Compound)" else "Fire Intensity",
+                      layerId = "fire_legend")
+          message("Added fire intensity polygons to map")
+        }, error = function(e) {
+          message("Error adding intensity polygons: ", e$message)
+        })
+      } else {
+        message("Warning: fire_intensity_pal palette not found")
       }
       
     }, error = function(e) {
       message("Error in fire display observer: ", e$message)
     })
   })
-  
   # Map layer visibility control
   observe({
     proxy <- leafletProxy("map")
@@ -1568,31 +2188,73 @@ setup_analysis_observers <- function(input, values, session = NULL) {
     # Prepare visualization data
     buses_active_sf <- buses_sf %>% filter(bus_i %in% active_buses)
     
-    # Get points for buses lost in this specific step
     fire_points <- if (step <= length(cascade_result$fire_points_list)) {
-      cascade_result$fire_points_list[[step]]
+      points_data <- cascade_result$fire_points_list[[step]]
+      
+      # Ensure fire points data has the expected structure
+      if (!is.null(points_data) && nrow(points_data) > 0) {
+        # Check if compound fire information is available
+        if ("is_compound_impact" %in% names(points_data)) {
+          message("Step ", step, ": Processing fire points with compound event information")
+          points_data
+        } else {
+          # Add compound event information if missing
+          points_data %>%
+            mutate(
+              is_compound_impact = FALSE,
+              affecting_fire_count = 1,
+              affecting_fire_names = if("attr_IncidentName" %in% names(.)) attr_IncidentName else "Unknown"
+            )
+        }
+      } else {
+        buses_sf[0, ] %>%
+          mutate(
+            impact_type = character(0),
+            fire_step = integer(0),
+            is_compound_impact = logical(0),
+            affecting_fire_count = integer(0),
+            affecting_fire_names = character(0)
+          )
+      }
     } else {
-      buses_sf[0, ]
+      buses_sf[0, ] %>%
+        mutate(
+          impact_type = character(0),
+          fire_step = integer(0),
+          is_compound_impact = logical(0),
+          affecting_fire_count = integer(0),
+          affecting_fire_names = character(0)
+        )
     }
     
     # Get all buses that have failed up to this point
     buses_failed_sf <- buses_sf %>% filter(bus_i %in% buses_lost_so_far)
     
-    # FIXED: Use bus_info instead of bus_data
-    edges_active_sf <- prepare_edges_sf(g_cur, bus_info)  # Changed from bus_data to bus_info
+    edges_active_sf <- prepare_edges_sf(g_cur, bus_info)
     
     # Find edges connected to at least one failed bus
     failed_edges_df <- igraph::as_data_frame(graph_original, what = "edges") %>%
       filter(from %in% buses_lost_so_far | to %in% buses_lost_so_far)
     failed_edges_graph <- graph_from_data_frame(failed_edges_df, directed = FALSE)
-    edges_failed_sf <- prepare_edges_sf(failed_edges_graph, bus_info)  # Changed from bus_data to bus_info
+    edges_failed_sf <- prepare_edges_sf(failed_edges_graph, bus_info)
     
-    # Define a fire icon for the map
-    fireIcon <- makeIcon(
-      iconUrl = "https://img.icons8.com/plasticine/100/000000/fire-element.png",
-      iconWidth = 30, iconHeight = 30,
-      iconAnchorX = 15, iconAnchorY = 15
-    )
+    #Create appropriate fire icons based on compound status
+    if (nrow(fire_points) > 0 && any(fire_points$is_compound_impact, na.rm = TRUE)) {
+      # Compound fire icon (larger, different color)
+      fireIcon <- makeIcon(
+        iconUrl = "https://img.icons8.com/plasticine/100/ff6b35/fire-element.png",
+        iconWidth = 35, iconHeight = 35,
+        iconAnchorX = 17, iconAnchorY = 17
+      )
+      message("Using compound fire icons for step ", step)
+    } else {
+      # Standard fire icon
+      fireIcon <- makeIcon(
+        iconUrl = "https://img.icons8.com/plasticine/100/000000/fire-element.png",
+        iconWidth = 30, iconHeight = 30,
+        iconAnchorX = 15, iconAnchorY = 15
+      )
+    }
     
     # Update map
     proxy <- leafletProxy("map") %>% 
@@ -1607,7 +2269,7 @@ setup_analysis_observers <- function(input, values, session = NULL) {
         addPolylines(
           data = edges_failed_sf, 
           group = "failed_elements",
-          color = "#E74C3C", # Red for failed lines
+          color = "#E74C3C",
           weight = 2, 
           opacity = 0.8
         )
@@ -1631,7 +2293,8 @@ setup_analysis_observers <- function(input, values, session = NULL) {
         addMarkers(
           data = buses_failed_sf,
           group = "failed_elements",
-          icon = makeIcon(iconUrl = "https://img.icons8.com/ios-filled/50/a0a0a0/delete-sign.png", iconWidth=12, iconHeight=12),
+          icon = makeIcon(iconUrl = "https://img.icons8.com/ios-filled/50/a0a0a0/delete-sign.png", 
+                          iconWidth=12, iconHeight=12),
           popup = ~paste0("Bus: ", bus_i, "<br>Status: FAILED")
         )
     }
@@ -1650,15 +2313,49 @@ setup_analysis_observers <- function(input, values, session = NULL) {
         )
     }
     
-    # Add FIRE SYMBOL on buses directly impacted by fire in the current step
     if (nrow(fire_points) > 0) {
+      
+      message("Adding ", nrow(fire_points), " fire icons for step ", step)
+      
+      # Create enhanced popup text for fire-affected buses
+      fire_points_with_popup <- fire_points %>%
+        mutate(
+          popup_text = case_when(
+            is_compound_impact ~ paste0(
+              "Bus: ", bus_i, 
+              "<br>Impact: Compound Fire Event",
+              "<br>Step: ", fire_step,
+              "<br>Fire Count: ", affecting_fire_count,
+              "<br>Fires: ", affecting_fire_names,
+              "<br>Impact Type: ", tools::toTitleCase(impact_type)
+            ),
+            TRUE ~ paste0(
+              "Bus: ", bus_i, 
+              "<br>Impact: Fire",
+              "<br>Step: ", fire_step,
+              "<br>Impact Type: ", tools::toTitleCase(impact_type)
+            )
+          )
+        )
+      
       proxy <- proxy %>%
         addMarkers(
-          data = fire_points,
+          data = fire_points_with_popup,
           group = "failed_elements",
           icon = fireIcon,
-          popup = ~paste0("Bus: ", bus_i, "<br>Impact: Fire<br>Step: ", fire_step)
+          popup = ~popup_text
         )
+      
+      # Log fire icon placement for debugging
+      compound_count <- sum(fire_points$is_compound_impact, na.rm = TRUE)
+      if (compound_count > 0) {
+        message("Placed ", compound_count, " compound fire icons and ", 
+                nrow(fire_points) - compound_count, " standard fire icons")
+      } else {
+        message("Placed ", nrow(fire_points), " standard fire icons")
+      }
+    } else {
+      message("No fire points to display for step ", step)
     }
   })
 }
@@ -1945,10 +2642,11 @@ summarize_tda_results <- function(results) {
 # ====================================================================
 
 render_output_functions <- function(output, values, input, selected_fire, selected_state = NULL) {
-  # System Status Output
+  
+  # Enhanced System Status Output with compound fire information
   output$system_status <- renderText({
     status_lines <- c(
-      "=== Enhanced Wildfire Grid Resilience System ===",
+      "=== Wildfire Grid Resilience System ===",
       paste("System Time:", Sys.time()),
       "",
       "--- Grid Information ---",
@@ -1962,42 +2660,41 @@ render_output_functions <- function(output, values, input, selected_fire, select
       paste("States with Fires:", length(unique(wfigs_perimeters$attr_POOState)))
     )
     
-    # Current selection info - FIXED: Check if selected_state function exists and is callable
-    if (!is.null(selected_state) && is.function(selected_state)) {
-      tryCatch({
-        current_state <- selected_state()
-        if (!is.null(current_state) && current_state != "") {
-          fires_in_state <- wfigs_perimeters %>%
-            filter(tolower(attr_POOState) == tolower(current_state))
-          
-          status_lines <- c(status_lines,
-                            "",
-                            "--- Selected State ---",
-                            paste("State:", tools::toTitleCase(current_state)),
-                            paste("Fires in State:", length(unique(fires_in_state$attr_IncidentName))),
-                            paste("Fire Records:", nrow(fires_in_state))
-          )
-        }
-      }, error = function(e) {
-        message("Error accessing selected_state: ", e$message)
-      })
-    }
-    
-    # Selected fire info - FIXED: Better error handling
+    # Enhanced selected fire info with compound fire detection
     tryCatch({
       fire_data <- selected_fire()
       if (!is.null(fire_data) && nrow(fire_data) > 0) {
-        status_lines <- c(status_lines,
-                          "",
-                          "--- Selected Fire ---",
-                          paste("Fire Name:", input$fire_event),
-                          paste("Intensity:", unique(fire_data$fire_intensity)[1]),
-                          paste("Total Area:", round(sum(fire_data$fire_acres, na.rm = TRUE)), "acres"),
-                          paste("Polygons:", nrow(fire_data)),
-                          paste("Time Steps:", length(unique(fire_data$step))),
-                          paste("Has Coordinates:", any(fire_data$has_center_point))
-        )
         
+        fire_names <- unique(fire_data$attr_IncidentName)
+        is_compound <- length(fire_names) > 1
+        
+        if (is_compound) {
+          status_lines <- c(status_lines,
+                            "",
+                            "--- Selected Compound Fire Event ---",
+                            paste("Fire Events:", length(fire_names)),
+                            paste("Fire Names:", paste(fire_names, collapse = ", ")),
+                            paste("Event Type: COMPOUND FIRE ANALYSIS"),
+                            paste("Combined Area:", round(sum(fire_data$fire_acres, na.rm = TRUE)), "acres"),
+                            paste("Total Polygons:", nrow(fire_data)),
+                            paste("Time Steps:", length(unique(fire_data$step))),
+                            paste("Has Coordinates:", any(fire_data$has_center_point))
+          )
+        } else {
+          status_lines <- c(status_lines,
+                            "",
+                            "--- Selected Fire ---",
+                            paste("Fire Name:", fire_names[1]),
+                            paste("Event Type: SINGLE FIRE ANALYSIS"),
+                            paste("Intensity:", unique(fire_data$fire_intensity)[1]),
+                            paste("Total Area:", round(sum(fire_data$fire_acres, na.rm = TRUE)), "acres"),
+                            paste("Polygons:", nrow(fire_data)),
+                            paste("Time Steps:", length(unique(fire_data$step))),
+                            paste("Has Coordinates:", any(fire_data$has_center_point))
+          )
+        }
+        
+        # Enhanced TDA results with compound fire information
         if (!is.null(values$tda_results)) {
           tda <- values$tda_results
           status_lines <- c(status_lines,
@@ -2005,10 +2702,16 @@ render_output_functions <- function(output, values, input, selected_fire, select
                             "--- COMPLETE TDA ANALYSIS ---")
           
           if (tda$success) {
+            analysis_type <- if (!is.null(tda$is_compound_event) && tda$is_compound_event) {
+              paste("COMPOUND EVENT (", tda$fire_count, " fires)")
+            } else {
+              "SINGLE FIRE"
+            }
+            
             status_lines <- c(status_lines,
-                              paste("Fire Analyzed:", tda$fire_name),
-                              paste("Analysis Type:", tda$analysis_type),
-                              paste("Analysis Radius:", tda$analysis_radius, "km"),
+                              paste("Analysis Type:", analysis_type),
+                              paste("Fire(s) Analyzed:", tda$fire_name),
+                              paste("Analysis Radius:", tda$analysis_params$analysis_radius_km, "km"),
                               paste("Status: COMPLETED SUCCESSFULLY"))
             
             if (!is.null(tda$report_path)) {
@@ -2016,20 +2719,29 @@ render_output_functions <- function(output, values, input, selected_fire, select
                                 paste("Report Location:", basename(dirname(tda$report_path))))
             }
             
-            # If we have diagram data, show some basic stats
-            if (!is.null(tda$diagram) && nrow(tda$diagram) > 0) {
+            if (!is.null(tda$before_features) && !is.null(tda$after_features)) {
               status_lines <- c(status_lines,
-                                paste("Topological Features Found:", nrow(tda$diagram)))
+                                paste("Features Before:", tda$before_features),
+                                paste("Features After:", tda$after_features),
+                                paste("Wasserstein Distance:", round(tda$wasserstein_distance, 6)))
             }
             
-            status_lines <- c(status_lines,
-                              "Analysis includes: Before/After topology comparison",
-                              "✓ Localized area analysis completed",
-                              "✓ Full cascade simulation completed", 
-                              "✓ Wasserstein distance calculated")
+            if (is_compound) {
+              status_lines <- c(status_lines,
+                                "Analysis includes: Compound fire topology comparison",
+                                "Multi-fire cascade simulation completed",
+                                "Combined topological impact assessed",
+                                "Compound disturbance signature captured")
+            } else {
+              status_lines <- c(status_lines,
+                                "Analysis includes: Before/After topology comparison",
+                                "Localized area analysis completed",
+                                "Full cascade simulation completed", 
+                                "Wasserstein distance calculated")
+            }
           } else {
             status_lines <- c(status_lines,
-                              paste("Fire:", tda$fire_name),
+                              paste("Fire(s):", tda$fire_name),
                               paste("Status: FAILED"),
                               paste("Error:", tda$error))
           }
@@ -2039,18 +2751,23 @@ render_output_functions <- function(output, values, input, selected_fire, select
       message("Error accessing selected fire: ", e$message)
     })
     
-    # Simulation status - FIXED: Better error handling
+    # Enhanced simulation status with compound fire detection
     if (!is.null(values$enhanced_cascade_results)) {
       tryCatch({
         result <- values$enhanced_cascade_results
         current_step <- input$step
         
+        # Check if this was a compound event
+        is_cascade_compound <- !is.null(result$is_compound_event) && result$is_compound_event
+        
         if (!is.null(current_step) && current_step <= nrow(result$metrics)) {
           step_metrics <- result$metrics[current_step, ]
           
+          cascade_type <- if (is_cascade_compound) "COMPOUND FIRE CASCADE" else "FIRE CASCADE"
+          
           status_lines <- c(status_lines,
                             "",
-                            paste("--- Simulation Step", current_step, "---"),
+                            paste("--- ", cascade_type, " Step", current_step, "---"),
                             paste("Fire-Affected (Direct):", step_metrics$direct_hits),
                             paste("Fire-Affected (Buffer):", step_metrics$buffer_hits),
                             paste("Cascade Failures:", step_metrics$deenergized),
@@ -2063,19 +2780,27 @@ render_output_functions <- function(output, values, input, selected_fire, select
           )
         }
         
-        # Overall statistics
+        # Overall statistics with compound fire notation
         total_fire_affected <- sum(result$metrics$fire_affected)
         total_deenergized <- sum(result$metrics$deenergized)
         
+        impact_type <- if (is_cascade_compound) "Compound Fire Impact" else "Fire Impact"
+        
         status_lines <- c(status_lines,
                           "",
-                          "--- Overall Impact ---",
+                          paste("--- Overall", impact_type, "---"),
                           paste("Total Fire-Affected:", total_fire_affected),
                           paste("Total Cascade Failures:", total_deenergized),
                           paste("Total Buses Lost:", total_fire_affected + total_deenergized),
                           paste("Final Grid Size:", tail(result$metrics$vertices_remaining, 1), "buses"),
                           paste("Simulation Steps:", length(result$graphs) - 1)
         )
+        
+        if (is_cascade_compound) {
+          status_lines <- c(status_lines,
+                            paste("Fire Events in Compound:", result$fire_count))
+        }
+        
       }, error = function(e) {
         message("Error processing cascade results: ", e$message)
       })
@@ -2356,7 +3081,7 @@ render_output_functions <- function(output, values, input, selected_fire, select
       sink(report_file)
       
       # Generate report content
-      cat("=== ENHANCED WILDFIRE GRID RESILIENCE ANALYSIS REPORT ===\n")
+      cat("=== WILDFIRE GRID RESILIENCE ANALYSIS REPORT ===\n")
       cat("Generated:", as.character(Sys.time()), "\n")
       cat("Analysis Version: 2.0 Enhanced\n\n")
       
@@ -2482,7 +3207,8 @@ server <- function(input, output, session) {
   tryCatch({
     handle_state_selection(input, session, selected_state)
     handle_intensity_selection(input, session)
-    handle_filter_changes(input, session)
+    handle_filter_changes(input, session)  # Updated function
+    handle_multiple_fire_selection(input, session, get_available_fire_events)  # NEW
     handle_cascade_execution(input, values, selected_fire, session)
     handle_tda_analysis(input, values, selected_fire)
   }, error = function(e) {
@@ -2520,9 +3246,13 @@ server <- function(input, output, session) {
   
   # 16. Final UI visibility management
   manage_ui_visibility(input, values)
+  
+  session$onSessionEnded(function() {
+    message("Shiny session ended. Cleaning up all parallel resources.")
+    cleanup_parallel_resources(force_cleanup = TRUE)
+  })
 }
 
-# Create UI from original server_1.R
 ui <- fluidPage(
   # Enable shinyjs
   useShinyjs(),
@@ -2605,6 +3335,20 @@ ui <- fluidPage(
         display: none;
       }
     ")),
+    tags$script(HTML("
+  Shiny.addCustomMessageHandler('updateProgress', function(data) {
+    var progressBar = document.querySelector('#tda-progress .progress-bar');
+    if (progressBar) {
+      progressBar.style.width = data.progress + '%';
+      progressBar.textContent = data.text;
+      
+      if (data.progress >= 100) {
+        progressBar.classList.remove('progress-bar-animated');
+        progressBar.classList.add('bg-success');
+      }
+    }
+  });
+")),
     
     tags$script(HTML("
       // Global error handler for Shiny
@@ -2630,7 +3374,6 @@ ui <- fluidPage(
       };
     "))
   ),
-  
   # Main map
   leafletOutput("map", height = "750px"),
   
@@ -2740,20 +3483,25 @@ ui <- fluidPage(
       div(class = "selection-step active",
           div(class = "step-header",
               div(class = "step-number active", "4"),
-              h5("Select Fire Event", style = "margin: 0;")
+              h5("Select Fire Events (Multiple Allowed)", style = "margin: 0;")  # CHANGED
           ),
+          
+          # UPDATED description text
+          p("Select one or more fires for compound event analysis. Multiple fires will show combined cascading effects:", 
+            style = "margin: 5px 0; color: #555;"),
+          
           uiOutput("fire_event_dropdown_dynamic"),
           uiOutput("selected_fire_summary_dynamic")
       )
     ),
     
-    # STEP 5: Visualization & Analysis Options (appears after fire selection)
+    # STEP 5: Analysis & Visualization (appears after fire selection)
     conditionalPanel(
-      condition = "input.fire_event != null && input.fire_event != ''",
+      condition = "input.proceed_to_analysis > 0 && ((input.fire_events != null && input.fire_events.length > 0) || (input.fire_event != null && input.fire_event != ''))",
       div(class = "selection-step completed",
           div(class = "step-header",
               div(class = "step-number completed", "5"),
-              h5("Visualization & Analysis", style = "margin: 0;")
+              h5("Analysis & Visualization", style = "margin: 0;")
           ),
           
           # Fire Visualization Controls
@@ -2776,43 +3524,108 @@ ui <- fluidPage(
               )
           ),
           
-          # Simulation Controls
+          # Enhanced Analysis Parameters Section
           div(class = "filter-group",
-              h6(icon("cogs"), " Simulation Parameters"),
+              h6(icon("cogs"), " Analysis Parameters"),
+              
+              # Step visualization controls
               sliderInput("step", "Simulation Step", 
                           min = 1, max = 1, value = 1, 
                           animate = animationOptions(interval = 2000)),
               
-              numericInput("buffer_km", "Impact Buffer (km):", 
-                           value = 2, min = 0.5, max = 10, step = 0.5),
+              # Two-column parameter layout with explanations
+              fluidRow(
+                column(6,
+                       div(style = "background: #e3f2fd; padding: 8px; border-radius: 4px; margin-bottom: 10px;",
+                           h6(style = "margin: 0; color: #1976d2;", icon("fire"), " Cascade Simulation"),
+                           numericInput("buffer_km", "Impact Buffer (km):", 
+                                        value = 2, min = 0.5, max = 10, step = 0.5),
+                           p("Determines direct fire impact range during cascade simulation.", 
+                             style = "font-size: 10px; margin: 0; color: #666;")
+                       )
+                ),
+                column(6,
+                       div(style = "background: #f3e5f5; padding: 8px; border-radius: 4px; margin-bottom: 10px;",
+                           h6(style = "margin: 0; color: #7b1fa2;", icon("search-plus"), " TDA Analysis"),
+                           numericInput("proximity_km", "Analysis Radius (km):", 
+                                        value = 30, min = 1, max = 100, step = 1),
+                           p("Defines scope of topological analysis around fire center.", 
+                             style = "font-size: 10px; margin: 0; color: #666;")
+                       )
+                )
+              ),
               
-              actionButton("run_cascade", "Run Enhanced Cascade", 
-                           class = "btn-warning", style = "width: 100%; margin-top: 10px;")
+              # Parameter relationship explanation
+              uiOutput("parameter_explanation_dynamic"),
+              
+              # Analysis execution buttons
+              fluidRow(
+                column(6,
+                       actionButton("run_cascade", "Run Cascade Simulation", 
+                                    class = "btn-info", style = "width: 100%; margin-bottom: 5px;"),
+                       p("Simulates fire impact & grid failures", 
+                         style = "font-size: 10px; text-align: center; margin: 0; color: #666;")
+                ),
+                column(6,
+                       actionButton("run_wildfire_tda", "Run Smart TDA Analysis", 
+                                    class = "btn-success", style = "width: 100%; margin-bottom: 5px;"),
+                       p("Topology analysis with smart cascade integration", 
+                         style = "font-size: 10px; text-align: center; margin: 0; color: #666;")
+                )
+              )
           ),
           
-          # Cascade Results
+          # Results Display Section
           conditionalPanel(
             condition = "input.run_cascade > 0",
-            div(class = "summary-box", id = "cascade-results-container", 
-                uiOutput("cascade_summary_dynamic"))
+            div(class = "filter-group",
+                h6(icon("chart-line"), " Cascade Results"),
+                uiOutput("cascade_summary_dynamic"),
+                
+                # Add cascade status indicator
+                div(id = "cascade-status", 
+                    conditionalPanel(
+                      condition = "output.cascade_available",
+                      div(class = "alert alert-success", style = "padding: 8px; margin: 5px 0; font-size: 12px;",
+                          icon("check-circle"), " Cascade results ready for TDA analysis")
+                    )
+                )
+            )
           ),
           
-          # Analysis Tabs
-          div(style = "margin-top: 15px;",
-              tabsetPanel(
-                tabPanel("TDA Analysis", 
-                         br(),
-                         uiOutput("tda_controls_dynamic"),
-                         uiOutput("tda_results_dynamic")
+          conditionalPanel(
+            condition = "output.tda_results_available",
+            div(class = "filter-group",
+                h6(icon("project-diagram"), " TDA Results"),
+                uiOutput("tda_results_dynamic"),
+                
+                # TDA results summary
+                conditionalPanel(
+                  condition = "output.tda_plots_available",
+                  div(style = "margin-top: 10px; text-align: center;",
+                      actionButton("view_cascade_progression", "View Cascade Progression", 
+                                   class = "btn-sm btn-info", style = "margin: 2px;"),
+                      actionButton("view_persistence_diagrams", "View Persistence Diagrams", 
+                                   class = "btn-sm btn-info", style = "margin: 2px;"),
+                      br(),
+                      downloadButton("download_tda_plots", "Download All TDA Plots", 
+                                     class = "btn-sm btn-success", style = "margin: 5px;")
+                  )
+                )
+            )
+          ),
+          
+          # Quick Export Section
+          div(class = "filter-group",
+              h6(icon("download"), " Quick Export"),
+              fluidRow(
+                column(6,
+                       downloadButton("download_results", "Complete Analysis", 
+                                      class = "btn-secondary", style = "width: 100%; font-size: 11px;")
                 ),
-                tabPanel("Export Results",
-                         br(),
-                         h6("Download Options"),
-                         downloadButton("download_results", "Download Complete Analysis", 
-                                        class = "btn-success", style = "width: 100%;"),
-                         br(), br(),
-                         downloadButton("download_gis", "Export for GIS", 
-                                        class = "btn-info", style = "width: 100%;")
+                column(6,
+                       downloadButton("download_plots_only", "Plots Only", 
+                                      class = "btn-secondary", style = "width: 100%; font-size: 11px;")
                 )
               )
           )
@@ -2823,38 +3636,102 @@ ui <- fluidPage(
   # Analysis Results Display (bottom panels)
   fluidRow(
     column(4, 
-           h3("Resilience Metrics"),
-           plotOutput("resilience_plot", height = "300px")
+           h3("Grid Resilience & TDA"),
+           plotOutput("resilience_plot", height = "300px"),
+           p("Shows grid functionality, connectivity, and topological changes over time.", 
+             style = "font-size: 11px; color: #666; margin-top: 5px;")
     ),
     column(4,
-           h3("Cascade Analysis"),
-           plotOutput("cascade_plot", height = "300px")
+           h3("Cascade Progression"),
+           plotOutput("cascade_progression_plot", height = "300px"),
+           p("Green line shows Wasserstein distance vs. nodes removed.", 
+             style = "font-size: 11px; color: #666; margin-top: 5px;")
     ),
     column(4,
-           h3("TDA Results"),
-           plotOutput("tda_plot", height = "300px")
+           h3("TDA Persistence Diagram"),
+           plotOutput("tda_plot", height = "300px"),
+           p("Topological features before/after wildfire impact.", 
+             style = "font-size: 11px; color: #666; margin-top: 5px;")
     )
   ),
   
   fluidRow(
     column(6,
-           h3("Fire Impact Timeline"),
-           plotOutput("fire_timeline_plot", height = "300px")
+           h3("TDA Before/After Comparison"),
+           plotOutput("tda_comparison_plot", height = "300px"),
+           p("Direct comparison of persistence diagrams showing topological changes.", 
+             style = "font-size: 11px; color: #666; margin-top: 5px;")
     ),
     column(6,
-           h3("Grid Vulnerability Heatmap"),
-           plotOutput("vulnerability_plot", height = "300px")
+           h3("Fire Impact Timeline"),
+           plotOutput("fire_timeline_plot", height = "300px"),
+           p("Fire progression over simulation steps.", 
+             style = "font-size: 11px; color: #666; margin-top: 5px;")
     )
   ),
   
   fluidRow(
     column(12,
-           h3("System Status"),
-           verbatimTextOutput("system_status")
+           h3("Comprehensive Analysis Results"),
+           
+           # Tabbed results section
+           tabsetPanel(
+             tabPanel("TDA Summary",
+                      br(),
+                      conditionalPanel(
+                        condition = "output.tda_results_available",
+                        div(class = "summary-box",
+                            h5(icon("chart-line"), " Topological Data Analysis Results"),
+                            verbatimTextOutput("tda_summary_text"),
+                            br(),
+                            conditionalPanel(
+                              condition = "output.tda_plots_available",
+                              div(style = "text-align: center;",
+                                  actionButton("view_all_plots", "View All TDA Plots", 
+                                               class = "btn-info"),
+                                  br(), br(),
+                                  downloadButton("download_tda_plots", "Download TDA Plots", 
+                                                 class = "btn-success")
+                              )
+                            )
+                        )
+                      ),
+                      conditionalPanel(
+                        condition = "!output.tda_results_available",
+                        div(class = "alert alert-info",
+                            icon("info-circle"), " Run TDA analysis to see detailed results here.")
+                      )
+             ),
+             
+             tabPanel("System Status",
+                      br(),
+                      verbatimTextOutput("system_status")
+             ),
+             
+             tabPanel("Export & Download",
+                      br(),
+                      h5("Download Options"),
+                      div(class = "filter-group",
+                          fluidRow(
+                            column(6,
+                                   downloadButton("download_results", "Complete Analysis", 
+                                                  class = "btn-success", style = "width: 100%; margin-bottom: 10px;"),
+                                   downloadButton("download_plots_only", "TDA Plots Only", 
+                                                  class = "btn-info", style = "width: 100%; margin-bottom: 10px;")
+                            ),
+                            column(6,
+                                   downloadButton("download_gis", "GIS Data", 
+                                                  class = "btn-warning", style = "width: 100%; margin-bottom: 10px;"),
+                                   downloadButton("download_matrices", "TDA Matrices", 
+                                                  class = "btn-secondary", style = "width: 100%; margin-bottom: 10px;")
+                            )
+                          )
+                      )
+             )
+           )
     )
   )
 )
-
 # ====================================================================
 # LAUNCH APPLICATION
 # ====================================================================

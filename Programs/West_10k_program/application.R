@@ -6,9 +6,9 @@
 
 cat("=== Wildfire Grid Resilience Explorer ===\n")
 if (!exists("system_initialized")) {
-  source("perseus_V3.R")    # Load Perseus functions first
-  source("global.R")        # Then global (which now uses Perseus functions)
-  source("main_attack_prototype_database.R")
+  source("TopologicalDataWorkflowWF.R")    # Load Perseus functions first
+  source("Global.R")        # Then global (which now uses Perseus functions)
+  source("AttackAndCascade.R")
 }
 
 # Verify system and launch

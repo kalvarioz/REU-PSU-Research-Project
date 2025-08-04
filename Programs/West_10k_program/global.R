@@ -1,3 +1,15 @@
+# =================================================================================================
+# Global.R
+
+# The foundational configuration and data loading engine for the
+# entire application. It is executed once at the beginning of the Shiny app's
+# lifecycle. Its responsibilities include:
+
+# Brandon Calvario
+
+# =================================================================================================
+
+
 
 library(shiny)
 library(leaflet)
@@ -16,8 +28,190 @@ library(tidyr)
 library(R6)  # For observer pattern implementation
 
 setwd("~/REU-PSU-Research-Project/Programs/West_10k_program")
+monitor_connections <- function() {
+  tryCatch({
+    all_cons <- showConnections(all = TRUE)
+    total_connections <- nrow(all_cons)
+    
+    # Count different types of connections
+    if (total_connections > 0) {
+      connection_types <- table(all_cons[, "class"])
+      
+      # Log if there are many connections
+      if (total_connections > 10) {
+        message("High connection count detected: ", total_connections)
+        message("Connection types: ", paste(names(connection_types), "=", connection_types, collapse = ", "))
+      }
+    }
+    
+    return(total_connections)
+  }, error = function(e) {
+    message("Error monitoring connections: ", e$message)
+    return(0)
+  })
+}
 
-plan(multisession)
+# FIX: Comprehensive parallel cleanup function to prevent connection leaks
+cleanup_parallel_resources <- function(force_cleanup = FALSE) {
+  message("=== COMPREHENSIVE PARALLEL CLEANUP ===")
+  
+  tryCatch({
+    # 1. Stop all future workers first
+    if (requireNamespace("future", quietly = TRUE)) {
+      current_plan <- future::plan()
+      if (inherits(current_plan, "multisession") || inherits(current_plan, "multicore")) {
+        message("  Stopping future workers...")
+        future::plan(future::sequential)
+        Sys.sleep(0.5)  # Give time for workers to shut down
+      }
+    }
+    
+    # 2. Stop doParallel clusters
+    if (requireNamespace("doParallel", quietly = TRUE) && requireNamespace("foreach", quietly = TRUE)) {
+      if (foreach::getDoParRegistered()) {
+        message("  Stopping doParallel workers...")
+        foreach::registerDoSEQ()
+      }
+    }
+    
+    # 3. CRITICAL FIX: Close lingering connections more safely
+    all_cons <- showConnections(all = TRUE)
+    if (nrow(all_cons) > 3) {  # Keep stdin, stdout, stderr
+      
+      problematic_cons <- all_cons[all_cons[, "class"] %in% c("textConnection", "sockconn", "file"), , drop = FALSE]
+      
+      if (nrow(problematic_cons) > 0) {
+        message("  Closing ", nrow(problematic_cons), " problematic connections...")
+        
+        for (i in 1:nrow(problematic_cons)) {
+          con_num <- as.integer(rownames(problematic_cons)[i])
+          con_desc <- problematic_cons[i, "description"]
+          
+          if (grepl("stdin|stdout|stderr", con_desc, ignore.case = TRUE)) next
+          
+          tryCatch({
+            close(con_num)
+            message("    Closed connection ", con_num, ": ", con_desc)
+          }, error = function(e) {
+            tryCatch({
+              con_obj <- getConnection(con_num)
+              close(con_obj)
+            }, error = function(e2) {
+              message("    Could not close connection ", con_num, ": ", e2$message)
+            })
+          })
+        }
+      }
+    }
+    
+    # 4. Reset data.table threads
+    if (requireNamespace("data.table", quietly = TRUE)) {
+      data.table::setDTthreads(1)
+      message("  Reset data.table to single thread")
+    }
+    
+    # 5. Force garbage collection
+    gc(verbose = FALSE)
+    
+    # 6. Final connection count
+    final_cons <- nrow(showConnections(all = TRUE))
+    message("  Final connection count: ", final_cons)
+    
+    message("✓ Comprehensive parallel cleanup complete")
+    
+  }, error = function(e) {
+    message("Error during comprehensive cleanup: ", e$message)
+  })
+  
+  return(invisible(TRUE))
+}
+
+# FIX: Simplified, safer parallel setup for Shiny
+setup_parallel_processing <- function(max_workers = 2) {
+  
+  cleanup_parallel_resources(force_cleanup = TRUE)
+  total_cores <- parallel::detectCores()
+  n_cores <- min(max_workers, max(1, total_cores - 2))
+  
+  message("=== SIMPLE PARALLEL SETUP ===")
+  message("Total cores: ", total_cores)
+  message("Using cores: ", n_cores)
+  
+  if (n_cores <= 1) {
+    message("Using sequential processing (safest option)")
+    future::plan(future::sequential)
+    return(1)
+  }
+  
+  tryCatch({
+    future::plan(future::multisession, workers = n_cores)
+    options(future.globals.maxSize = 500 * 1024^2)
+    options(future.rng.onMisuse = "ignore")
+    
+    message("✓ Simple parallel setup complete: ", n_cores, " workers")
+    return(n_cores)
+    
+  }, error = function(e) {
+    message("Error in parallel setup, falling back to sequential: ", e$message)
+    future::plan(future::sequential)
+    return(1)
+  })
+}
+
+# FIX: Safe parallel execution wrapper
+run_with_parallel_safety <- function(expr, fallback_expr = NULL, cleanup_after = TRUE) {
+  result <- NULL
+  tryCatch({
+    before_count <- monitor_connections()
+    result <- expr
+    after_count <- monitor_connections()
+    if (after_count > before_count + 5) {
+      message("Connection count increased significantly, cleaning up...")
+      cleanup_parallel_resources()
+    }
+  }, error = function(e) {
+    message("Error in parallel execution: ", e$message)
+    cleanup_parallel_resources(force_cleanup = TRUE)
+    
+    if (!is.null(fallback_expr)) {
+      message("Trying fallback expression...")
+      tryCatch({
+        result <<- fallback_expr
+      }, error = function(e2) {
+        message("Fallback also failed: ", e2$message)
+        stop("Both parallel and fallback execution failed")
+      })
+    } else {
+      stop(e$message)
+    }
+  })
+  
+  if (cleanup_after) {
+    Sys.sleep(0.1)
+    cleanup_parallel_resources()
+  }
+  
+  return(result)
+}
+
+# FIX: Add session cleanup for Shiny
+setup_shiny_session_cleanup <- function(session) {
+  session$onSessionEnded(function() {
+    message("Shiny session ending - cleaning up all resources...")
+    cleanup_parallel_resources(force_cleanup = TRUE)
+  })
+  
+  observe({
+    invalidateLater(300000) # 5 minutes
+    conn_count <- monitor_connections()
+    if (conn_count > 15) {
+      message("Periodic cleanup triggered due to high connection count")
+      cleanup_parallel_resources()
+    }
+  })
+}
+
+
 
 cfg <- list(
   data_dir      = "databases/",
@@ -30,8 +224,14 @@ cfg <- list(
                      "new mexico"),
   simulation_steps = 20,
   max_fire_events = 100
-  
 )
+parallel_processing = list(
+  enabled = TRUE,
+  method = "multisession",  # Safe for all platforms
+  max_workers = max(1, parallel::detectCores() - 1),
+  memory_limit_gb = 4  
+)
+
 
 create_output_directories <- function() {
   dirs_to_create <- c(
@@ -205,19 +405,120 @@ create_integrated_bus_info <- function() {
       )
     )
   
-  # Create the final bus_info sf object in the global environment
-  if (nrow(bus_info_temp %>% filter(!is.na(longitude), !is.na(latitude))) > 0) {
-    bus_info <<- st_as_sf(bus_info_temp %>% filter(!is.na(longitude), !is.na(latitude)), 
-                          coords = c("longitude", "latitude"), crs = 4326, remove = FALSE)
-  } else {
-    # Create empty sf object if no coordinates
-    bus_info <<- st_sf(bus_info_temp[0, ], geometry = st_sfc(crs = 4326))
+  message("  Raw bus data: ", nrow(bus_info_temp), " rows")
+  
+  # Check for coordinate columns
+  if (!"longitude" %in% names(bus_info_temp) || !"latitude" %in% names(bus_info_temp)) {
+    stop("Missing longitude or latitude columns in bus data")
   }
   
-  # Create buses_sf for compatibility with existing code
+  # Filter for valid coordinates
+  bus_info_with_coords <- bus_info_temp %>%
+    filter(!is.na(longitude), !is.na(latitude), 
+           abs(longitude) > 0, abs(latitude) > 0,
+           abs(longitude) <= 180, abs(latitude) <= 90)
+  
+  message("  Buses with valid coordinates: ", nrow(bus_info_with_coords))
+  
+  # Create sf object with robust error handling
+  if (nrow(bus_info_with_coords) > 0) {
+    tryCatch({
+      bus_info <<- st_as_sf(bus_info_with_coords, 
+                            coords = c("longitude", "latitude"), 
+                            crs = 4326, 
+                            remove = FALSE)
+      
+      # Verify it's actually an sf object
+      if (!inherits(bus_info, "sf")) {
+        stop("Failed to create sf object - st_as_sf returned non-sf object")
+      }
+      
+      message("  ✓ Successfully created sf object: ", nrow(bus_info), " buses")
+      
+    }, error = function(e) {
+      message("  ✗ Error creating sf object: ", e$message)
+      message("  Creating fallback sf object...")
+      
+      # Create a minimal sf object as fallback
+      empty_sf <- st_sf(
+        bus_i = integer(0),
+        total_gen = numeric(0),
+        load_mw = numeric(0), 
+        bus_type = character(0),
+        geometry = st_sfc(crs = 4326)
+      )
+      bus_info <<- empty_sf
+      
+      warning("Bus spatial data creation failed. Using empty sf object.")
+    })
+    
+  } else {
+    message("  ⚠ No buses with valid coordinates found")
+    message("  Creating empty sf object...")
+    
+    # Create empty sf object with correct structure
+    empty_sf <- st_sf(
+      bus_i = integer(0),
+      type = integer(0),
+      pd = numeric(0),
+      vm = numeric(0),
+      va = numeric(0),
+      baseKV = numeric(0),
+      zone = integer(0),
+      vmax = numeric(0),
+      vmin = numeric(0),
+      bus_name = character(0),
+      longitude = numeric(0),
+      latitude = numeric(0),
+      total_gen = numeric(0),
+      load_mw = numeric(0),
+      load_mvar = numeric(0),
+      bus_type = character(0),
+      geometry = st_sfc(crs = 4326)
+    )
+    bus_info <<- empty_sf
+  }
+  
+  # Final validation
+  if (!inherits(bus_info, "sf")) {
+    stop("Critical error: bus_info is not an sf object after creation")
+  }
+  
+  # Create buses_sf for compatibility (can be deprecated later)
   buses_sf <<- bus_info 
   
-  message("✓ Integrated bus_info object created: ", nrow(bus_info), " buses")
+  message("✓ Integrated bus_info created: ", nrow(bus_info), " buses")
+  message("  Object class: ", paste(class(bus_info), collapse = ", "))
+}
+
+# Diagnostic function to check bus_info status
+check_bus_info_status <- function() {
+  cat("=== BUS_INFO STATUS CHECK ===\n")
+  
+  if (!exists("bus_info")) {
+    cat("❌ bus_info does not exist\n")
+    return(FALSE)
+  }
+  
+  cat("✓ bus_info exists\n")
+  cat("  Class: ", paste(class(bus_info), collapse = ", "), "\n")
+  cat("  Is sf object: ", inherits(bus_info, "sf"), "\n")
+  cat("  Number of rows: ", nrow(bus_info), "\n")
+  
+  if (inherits(bus_info, "sf")) {
+    cat("  CRS: ", st_crs(bus_info)$input, "\n")
+    if (nrow(bus_info) > 0) {
+      coords <- st_coordinates(bus_info)
+      cat("  Coordinate range: X[", round(min(coords[,1]), 3), ",", 
+          round(max(coords[,1]), 3), "], Y[", round(min(coords[,2]), 3), 
+          ",", round(max(coords[,2]), 3), "]\n")
+    }
+    cat("✅ bus_info is valid sf object\n")
+    return(TRUE)
+  } else {
+    cat("❌ bus_info is not an sf object\n")
+    return(FALSE)
+  }
 }
 
 
@@ -1325,6 +1626,7 @@ initialize_system <- function() {
     # --- Step 2: Create core data structures ---
     create_integrated_bus_info()
     create_branch_info()
+    clean_duplicate_data()
     load_power_grid()
     
     # --- Step 3: Create spatial data (including states_sf) ---
@@ -1354,39 +1656,6 @@ initialize_system <- function() {
   }
   
   return(invisible(exists("system_ready") && system_ready))
-}
-
-create_integrated_bus_info <- function() {
-  message("Creating integrated bus information...")
-  
-  # CORRECTED: Assign to a temporary variable first to avoid confusion
-  bus_info_temp <- mpc_bus %>%
-    left_join(bus_data, by = "bus_i") %>%
-    left_join(
-      gen_data %>% group_by(bus_i) %>% summarise(total_gen = sum(Pg, na.rm = TRUE), .groups = 'drop'),
-      by = "bus_i"
-    ) %>%
-    left_join(load_data, by = "bus_i") %>%
-    mutate(
-      total_gen = ifelse(is.na(total_gen), 0, total_gen),
-      load_mw = ifelse(is.na(load_mw), 0, load_mw),
-      bus_type = case_when(
-        total_gen > 0 & load_mw > 0 ~ "Gen + Load",
-        total_gen > 0 ~ "Generator",
-        load_mw > 0 ~ "Load",
-        TRUE ~ "Neither"
-      )
-    )
-  
-  # Create the final bus_info sf object in the global environment
-  bus_info <<- st_as_sf(bus_info_temp %>% filter(!is.na(longitude), !is.na(latitude)), 
-                        coords = c("longitude", "latitude"), crs = 4326, remove = FALSE)
-  
-  # DEPRECATED: buses_sf is no longer needed, bus_info is the single source of truth.
-  # We will create it here for compatibility with older code but should be phased out.
-  buses_sf <<- bus_info 
-  
-  message("✓ Integrated bus_info (and buses_sf) created: ", nrow(bus_info), " buses")
 }
 
 create_color_palettes <- function() {
