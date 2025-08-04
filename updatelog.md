@@ -139,22 +139,34 @@ Takes quite a while, but im getting results by testing in smaller sets, so ill t
 
 ## 7/22 - States are selectable
 
+Some work done to get states to be selectable, i think this change will be something good to use to get into specifics.
+
 ## 7/23 - 
 
-## 7/24 - Progress update
+## 7/24 - Progress update presentation 
+
+Sacrificed some work for a neat little presentation, but its always good to present updates to my peers!
 
 ## 7/25 - Writing initial rough draft of research paper.
 
+I have began doing initial drafts for my paper, some simple introductions and abstracts.
+
 ## 7/28 - Met with Dr. Ofori-Boateng, More filtering and implementation ideas!
 
+Adding multiple fire scenarios, and more sorting based on intensity would be an awesome implementation
+<img width="881" height="844" alt="{4F85779B-C1EA-4004-B1D3-509852E7B790}" src="https://github.com/user-attachments/assets/39778347-c3cd-436b-afad-bc340d51012b" />
 
 ## 7/29 - Handling some errors.
+
+Today was spent mostly organizng code and sorting things out in the backend, i probably should have done this yesterday, but as long as it turns out well!
 
 ## 7/30 - eureka!
 
 All because of a simple file name, always good to look though the program, luckily i was able to catch a super simple, yet ultra critical error, program now runs and is almost functional, looks like i need to adjust the UI for some bugs here and there.
+<img width="895" height="709" alt="Cascade_results_visual" src="https://github.com/user-attachments/assets/d811ff31-87e4-4e84-a177-2d702cadf39d" />
 
 ## 7/31 - Running more tests
 
-Some errors, it seems to be mostly UI bugs, so ill be working on updating that and getting rid of those issues.
+Some errors, it seems to be mostly UI bugs, so ill be working on updating that and getting rid of those issues. I am beginning to implement parallel processing and features related. 
 
+<img width="603" height="359" alt="{14E8F0C4-E779-42B1-8E6C-8FECB822723C}" src="https://github.com/user-attachments/assets/3dbaa17a-96e0-4784-a721-7ca46e5ecc07" />
