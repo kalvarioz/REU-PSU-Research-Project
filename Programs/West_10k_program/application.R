@@ -1,38 +1,87 @@
-# app.R - Clean Shiny Application Launcher
-# ====================================================================
-
+# =================================================================================================
+# Application.R
 # This file launches the Shiny application
-# All example functions have been moved to examples.R
+
+# Brandon Calvario
+
+
+# =================================================================================================
 
 cat("=== Wildfire Grid Resilience Explorer ===\n")
-if (!exists("system_initialized")) {
-  source("TopologicalDataWorkflowWF.R")    # Load Perseus functions first
-  source("Global.R")        # Then global (which now uses Perseus functions)
+
+# Initialize system_initialized flag
+system_initialized <- FALSE
+
+tryCatch({
+  # Load core modules in correct order
+  cat("Loading Perseus functions...\n")
+  source("TopologicalDataWorkflowWF.R")
+  
+  cat("Loading Global functions...\n") 
+  source("Global.R")
+  
+  cat("Loading Attack and Cascade functions...\n")
   source("AttackAndCascade.R")
-}
+  
+  cat("All modules loaded successfully\n")
+  
+}, error = function(e) {
+  cat("Error loading modules: ", e$message, "\n")
+  stop("Failed to load required modules")
+})
 
-# Verify system and launch
+# Verify system initialization
 if (!exists("system_initialized") || !system_initialized) {
-  stop("System initialization failed. Check global.R for errors.")
+  cat("System not initialized. Check Global.R for errors.\n")
+  cat("Please ensure all data files are present and try again.\n")
+  
+  # List critical files that should exist
+  critical_files <- c(
+    "databases/mpc_bus.csv",
+    "parsed_csv/bus_data.csv", 
+    "databases/mpc_branch.csv",
+    "parsed_csv/branch_data.csv",
+    "databases/mpc_gen.csv",
+    "databases/load_data.csv"
+  )
+  
+  cat("Checking critical files:\n")
+  for (file in critical_files) {
+    exists <- file.exists(file)
+    cat("  ", file, ":", if (exists) "EXISTS" else "MiSSING", "\n")
+  }
+  
+  stop("System initialization failed. Check data files and Global.R configuration.")
 }
 
+# Verify critical objects exist
 critical_objects <- c("graph_original", "bus_info", "buses_sf", "wfigs_perimeters")
 missing_objects <- critical_objects[!sapply(critical_objects, exists)]
 
 if (length(missing_objects) > 0) {
-  warning("Missing critical objects: ", paste(missing_objects, collapse = ", "))
+  cat("Missing critical objects: ", paste(missing_objects, collapse = ", "), "\n")
+  cat("System may have partial functionality.\n")
 }
 
+# Load and launch Shiny application
 if (file.exists("WildfireServer.R")) {
   cat("Loading Shiny application...\n")
   source("WildfireServer.R")
   
   if (!exists("ui") || !exists("server")) {
-    stop("UI or Server functions not found in server_1.R")
+    stop("UI or Server functions not found in WildfireServer.R")
   }
   
-  cat("✓ Application ready\n")
-  shinyApp(ui = ui, server = server)
+  cat("Application ready to launch\n")
+  
+  # Launch with error handling
+  tryCatch({
+    shinyApp(ui = ui, server = server)
+  }, error = function(e) {
+    cat("Error launching Shiny app: ", e$message, "\n")
+    cat("Try restarting R and running the application again.\n")
+  })
+  
 } else {
-  stop("server not found.")
+  stop("WildfireServer.R not found.")
 }

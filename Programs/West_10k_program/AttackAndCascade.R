@@ -4,12 +4,16 @@ library(parallel)
 library(data.table)
 library(foreach)
 library(doParallel)
+# =================================================================================================
+# AttackAndCascade.R
 
-setup_parallel_processing <- function(method = "multisession", max_workers = 2) {
-  return(setup_parallel_processing(max_workers = max_workers)) # Calls the global function
-}
 
-# FIX: Simplified monitoring that doesn't cause issues.
+# Brandon Calvario
+
+
+# =================================================================================================
+
+
 monitor_parallel_performance <- function() {
   tryCatch({
     message("=== PARALLEL STATUS CHECK ===")
@@ -186,11 +190,11 @@ identify_deenergized_components <- function(g, generator_buses) {
 }
 
 generate_attacked_state_matrix <- function(affected_bus_ids) {
-  message("=== GENERATING ATTACKED STATE FROM ORIGINAL CSV ===")
+  message("=== GENERATING ATTACKED STATE FROM ORIGINAL MATRIX ===")
   
   # Check if healthy state is loaded
   if (!exists("healthy_state_matrix")) {
-    stop("Healthy state matrix not loaded. Run initialize_healthy_state_baseline() first.")
+    stop("Original healthy state matrix not loaded. Run initialize_healthy_state_baseline() first.")
   }
   
   original_matrix <- healthy_state_matrix
@@ -200,13 +204,10 @@ generate_attacked_state_matrix <- function(affected_bus_ids) {
     return(original_matrix)
   }
   
-  if (is.null(rownames(original_matrix)) || is.null(colnames(original_matrix))) {
-    message("⚠️  Matrix lacks proper row/column names, using indices")
-    # Assume matrix rows/cols correspond to bus indices 1:n
-    n_buses <- nrow(original_matrix)
-    bus_ids <- 1:n_buses
+  # **CRITICAL FIX**: Don't generate new matrix, use submatrix of original
+  if (is.null(rownames(original_matrix))) {
+    bus_ids <- 1:nrow(original_matrix)
   } else {
-    # Extract bus IDs from row names (they might be like "bus_123" or just "123")
     bus_ids <- as.numeric(gsub("bus_", "", rownames(original_matrix)))
   }
   
@@ -216,94 +217,300 @@ generate_attacked_state_matrix <- function(affected_bus_ids) {
   
   if (length(surviving_indices) < 2) {
     message("⚠️  Too few surviving buses (", length(surviving_indices), ") for analysis")
-    # Return minimal 2x2 matrix to avoid Perseus errors
     return(matrix(c(0, 0.1, 0.1, 0), nrow = 2, ncol = 2))
   }
   
-  # Extract submatrix for surviving buses
+  # **KEY FIX**: Extract submatrix from original (no normalization!)
   attacked_matrix <- original_matrix[surviving_indices, surviving_indices]
   
-  message("✓ Attacked matrix generated:")
+  message("✓ Attacked matrix extracted from ORIGINAL:")
   message("  Original: ", nrow(original_matrix), "×", ncol(original_matrix))
   message("  Attacked: ", nrow(attacked_matrix), "×", ncol(attacked_matrix))
   message("  Buses removed: ", length(affected_bus_ids))
+  message("  Value range preserved: [", round(min(attacked_matrix, na.rm = TRUE), 6), 
+          ", ", round(max(attacked_matrix, na.rm = TRUE), 6), "]")
   
   return(attacked_matrix)
 }
 
-prepare_fire_polygons_by_step <- function(fire_data) {
+prepare_fire_polygons_by_period <- function(fire_data) {
+  message("=== ENHANCED FIRE POLYGON PREPARATION (REAL WFIGS DATA) ===")
   
   if (is.null(fire_data) || nrow(fire_data) == 0) {
     message("No fire data provided")
     return(list())
   }
   
-  # Ensure we have step information
-  if (!"step" %in% names(fire_data)) {
-    message("Warning: No 'step' column found, creating single step")
-    fire_data$step <- 1
+  # Ensure all required columns exist (these should have been created by Global.R processing)
+  required_columns <- c("time_period_quality", "period_from", "period_to", 
+                        "period_duration_hours", "is_gap_period")
+  
+  missing_columns <- setdiff(required_columns, names(fire_data))
+  
+  if (length(missing_columns) > 0) {
+    message("Missing time period columns, running enhanced processing...")
+    message("Note: This should have been done in Global.R data processing")
+    fire_data <- add_date_and_step_info(fire_data)
   }
   
-  # Split fire data by step
-  fire_polys_by_step <- split(fire_data, fire_data$step)
-  
-  # Remove any empty steps
-  fire_polys_by_step <- fire_polys_by_step[lengths(fire_polys_by_step) > 0]
-  
-  message("Prepared fire polygons for ", length(fire_polys_by_step), " steps")
-  
-  # Print step summary
-  for (i in seq_along(fire_polys_by_step)) {
-    step_num <- names(fire_polys_by_step)[i]
-    step_data <- fire_polys_by_step[[i]]
-    total_area <- sum(step_data$fire_acres, na.rm = TRUE)
-    message("  Step ", step_num, ": ", nrow(step_data), " polygons, ", 
-            round(total_area), " acres")
+  # Analyze data quality for summary
+  if ("time_period_quality" %in% names(fire_data)) {
+    quality_summary <- table(fire_data$time_period_quality)
+    message("Time period data quality summary:")
+    for (quality in names(quality_summary)) {
+      message("  ", quality, " quality: ", quality_summary[quality], " records")
+    }
   }
   
-  return(fire_polys_by_step)
+  # Handle multi-state fires - group by both fire name AND state for cross-state fires
+  if ("is_multi_state_event" %in% names(fire_data) && any(fire_data$is_multi_state_event, na.rm = TRUE)) {
+    message("Detected multi-state fires, using enhanced grouping...")
+    fire_polys_by_period <- split(fire_data, 
+                                  paste(fire_data$attr_IncidentName, 
+                                        fire_data$attr_POOState, 
+                                        fire_data$step, sep = "_"))
+  } else {
+    # Standard grouping by fire name and step
+    fire_polys_by_period <- split(fire_data, 
+                                  paste(fire_data$attr_IncidentName, 
+                                        fire_data$step, sep = "_"))
+  }
+  
+  # Remove empty periods
+  fire_polys_by_period <- fire_polys_by_period[lengths(fire_polys_by_period) > 0]
+  
+  # Sort by time period with enhanced sorting for mixed quality data
+  if (length(fire_polys_by_period) > 0) {
+    period_times <- sapply(fire_polys_by_period, function(x) {
+      if ("period_from" %in% names(x) && any(!is.na(x$period_from))) {
+        min(x$period_from, na.rm = TRUE)
+      } else {
+        Sys.time()
+      }
+    })
+    fire_polys_by_period <- fire_polys_by_period[order(period_times)]
+  }
+  
+  message("Prepared fire polygons for ", length(fire_polys_by_period), " time periods")
+  
+  # Enhanced period summary showing data quality
+  for (i in seq_along(fire_polys_by_period)) {
+    period_data <- fire_polys_by_period[[i]]
+    fire_name <- unique(period_data$attr_IncidentName)[1]
+    step_num <- unique(period_data$step)[1]
+    total_area <- sum(period_data$fire_acres, na.rm = TRUE)
+    
+    # Data quality indicators
+    quality <- if ("time_period_quality" %in% names(period_data)) {
+      quality_modes <- names(sort(table(period_data$time_period_quality), decreasing = TRUE))
+      quality_modes[1]
+    } else {
+      "unknown"
+    }
+    
+    has_ics209 <- "attr_ICS209RptForTimePeriodFrom" %in% names(period_data) && 
+      any(!is.na(period_data$attr_ICS209RptForTimePeriodFrom))
+    
+    start_time <- if ("period_from" %in% names(period_data)) {
+      min(period_data$period_from, na.rm = TRUE)
+    } else {
+      Sys.time()
+    }
+    
+    end_time <- if ("period_to" %in% names(period_data)) {
+      max(period_data$period_to, na.rm = TRUE)
+    } else {
+      Sys.time() + hours(24)
+    }
+    
+    duration <- as.numeric(difftime(end_time, start_time, units = "hours"))
+    
+    is_gap <- if ("is_gap_period" %in% names(period_data)) {
+      any(period_data$is_gap_period %in% TRUE, na.rm = TRUE)
+    } else {
+      FALSE
+    }
+    
+    # Enhanced logging
+    data_source <- if (has_ics209) "[ICS209]" else "[FALLBACK]"
+    gap_indicator <- if (is_gap) " [GAP]" else ""
+    
+    message(sprintf("  Period %d: %s (Step %d) %s - %s to %s (%.1fh) - %d polygons, %.0f acres [%s]%s",
+                    i, fire_name, step_num, data_source,
+                    format(start_time, "%m/%d %H:%M"),
+                    format(end_time, "%m/%d %H:%M"),
+                    duration,
+                    nrow(period_data),
+                    total_area,
+                    quality,
+                    gap_indicator))
+  }
+  
+  return(fire_polys_by_period)
+}
+
+# 3. ENHANCED TIME PERIOD VALIDATION
+validate_time_periods <- function(fire_data) {
+  message("Validating time periods for cascade analysis...")
+  validation_results <- list()
+  
+  # Only validate if columns exist (should have been created by Global.R)
+  if ("time_period_quality" %in% names(fire_data)) {
+    # Check for fires with no time period data
+    no_time_data <- fire_data %>%
+      filter(time_period_quality == "low") %>%
+      distinct(attr_IncidentName)
+    
+    if (nrow(no_time_data) > 0) {
+      validation_results$warnings <- c(
+        validation_results$warnings,
+        paste("Fires with poor time data:", paste(no_time_data$attr_IncidentName, collapse = ", "))
+      )
+    }
+    
+    # Count fires by quality
+    quality_by_fire <- fire_data %>%
+      group_by(attr_IncidentName) %>%
+      summarise(
+        primary_quality = names(sort(table(time_period_quality), decreasing = TRUE))[1],
+        .groups = 'drop'
+      )
+    
+    quality_summary <- table(quality_by_fire$primary_quality)
+    validation_results$info <- c(
+      validation_results$info,
+      paste("Fire quality distribution:", paste(names(quality_summary), "=", quality_summary, collapse = ", "))
+    )
+  }
+  
+  if ("period_duration_hours" %in% names(fire_data)) {
+    long_periods <- fire_data %>%
+      filter(period_duration_hours > 720) %>% # >30 days
+      distinct(attr_IncidentName, step, .keep_all = TRUE)
+    
+    if (nrow(long_periods) > 0) {
+      validation_results$warnings <- c(
+        validation_results$warnings,
+        paste("Fires with very long periods (>30 days):", nrow(long_periods), "periods found")
+      )
+    }
+    
+    # Check for reasonable period durations
+    reasonable_periods <- fire_data %>%
+      filter(period_duration_hours >= 1, period_duration_hours <= 168) %>% # 1 hour to 1 week
+      nrow()
+    
+    validation_results$info <- c(
+      validation_results$info,
+      paste("Records with reasonable period durations:", reasonable_periods, "/", nrow(fire_data))
+    )
+  }
+  
+  # Check for fires with only one period
+  if ("step" %in% names(fire_data) && "attr_IncidentName" %in% names(fire_data)) {
+    single_period_fires <- fire_data %>%
+      group_by(attr_IncidentName) %>%
+      summarise(period_count = max(step, na.rm = TRUE), .groups = 'drop') %>%
+      filter(period_count == 1)
+    
+    multi_period_fires <- fire_data %>%
+      group_by(attr_IncidentName) %>%
+      summarise(period_count = max(step, na.rm = TRUE), .groups = 'drop') %>%
+      filter(period_count > 1)
+    
+    if (nrow(single_period_fires) > 0) {
+      validation_results$info <- c(
+        validation_results$info,
+        paste("Fires with single time period:", nrow(single_period_fires), "fires")
+      )
+    }
+    
+    if (nrow(multi_period_fires) > 0) {
+      validation_results$info <- c(
+        validation_results$info,
+        paste("Fires with multiple time periods:", nrow(multi_period_fires), "fires (good for temporal analysis)")
+      )
+    }
+  }
+  
+  # Check for ICS209 data availability
+  if ("attr_ICS209RptForTimePeriodFrom" %in% names(fire_data)) {
+    fires_with_ics209 <- fire_data %>%
+      group_by(attr_IncidentName) %>%
+      summarise(
+        has_ics209 = any(!is.na(attr_ICS209RptForTimePeriodFrom) & !is.na(attr_ICS209RptForTimePeriodTo)),
+        .groups = 'drop'
+      )
+    
+    ics209_count <- sum(fires_with_ics209$has_ics209)
+    total_fires <- nrow(fires_with_ics209)
+    
+    validation_results$info <- c(
+      validation_results$info,
+      paste("Fires with ICS209 time data:", ics209_count, "/", total_fires)
+    )
+  }
+  
+  validation_results$valid <- TRUE
+  
+  # Log validation results
+  if (length(validation_results$warnings) > 0) {
+    message("Validation warnings:")
+    for (warning in validation_results$warnings) {
+      message("  ⚠ ", warning)
+    }
+  }
+  
+  if (length(validation_results$info) > 0) {
+    message("Validation info:")
+    for (info in validation_results$info) {
+      message("  ℹ ", info)
+    }
+  }
+  
+  return(validation_results)
 }
 
 run_enhanced_fire_cascade <- function(graph, buses_sf, fire_data, buffer_km = 5, steps = 20, 
                                       use_parallel = TRUE, parallel_method = "multisession") {
   
   if (use_parallel) {
-    message("=== STARTING PARALLEL CASCADE ANALYSIS ===")
-    
-    # Setup parallel processing
+    message("=== STARTING ENHANCED PARALLEL CASCADE ANALYSIS ===")
     n_cores <- setup_parallel_processing(method = parallel_method)
     
-    # Monitor performance
-    monitor_parallel_performance()
+    # UPDATED: Use enhanced fire polygon preparation
+    fire_polys_by_period <- prepare_fire_polygons_by_period(fire_data)  # Use new function
     
-    # Prepare fire data
-    fire_polys_by_step <- prepare_fire_polygons_by_step(fire_data)
+    # Validate time periods
+    validation_result <- validate_time_periods(fire_data)  # Use new function
+    if (length(validation_result$warnings) > 0) {
+      message("Time period warnings: ", paste(validation_result$warnings, collapse = "; "))
+    }
     
-    # Run parallel simulation
     result <- simulate_fire_cascade(
       graph = graph,
       buses_sf = buses_sf,
-      fire_polys_by_step = fire_polys_by_step,
+      fire_polys_by_step = fire_polys_by_period,
       buffer_km = buffer_km,
       steps = steps
     )
     
-    # Monitor final performance
-    monitor_parallel_performance()
+    # Add enhanced metadata
+    result$time_period_validation <- validation_result
+    result$is_multi_state_analysis <- length(unique(fire_data$attr_POOState)) > 1
+    result$states_analyzed <- unique(fire_data$attr_POOState)
     
-    # Cleanup (optional - comment out if you want to keep parallel setup for subsequent analyses)
-    # cleanup_parallel_resources()
-    
-    message("=== PARALLEL CASCADE ANALYSIS COMPLETE ===")
-    
+    message("=== ENHANCED CASCADE ANALYSIS COMPLETE ===")
     return(result)
     
   } else {
-    # Fall back to original non-parallel version
-    message("Using sequential (non-parallel) processing")
-    return(run_enhanced_fire_cascade(graph, buses_sf, fire_data, buffer_km, steps))
+    # Fallback to sequential processing with enhanced features
+    message("Using enhanced sequential processing")
+    fire_polys_by_period <- prepare_fire_polygons_by_period(fire_data)
+    return(simulate_fire_cascade(graph, buses_sf, fire_polys_by_period, buffer_km, steps))
   }
 }
+
 
 validate_fire_data <- function(fire_data) {
   
@@ -508,7 +715,7 @@ simulate_fire_cascade <- function(graph, buses_sf, fire_polys_by_step, buffer_km
       
       # PARALLEL: Calculate step metrics
       step_metrics[[step_num]] <- calculate_step_metrics(g_final, buses_lost_this_step, step_num, 
-                                                                  fire_affected_buses, deenergized_buses)
+                                                         fire_affected_buses, deenergized_buses)
       
       # Break if grid is completely destroyed
       if (vcount(g_final) == 0) {
@@ -833,9 +1040,10 @@ calculate_step_metrics <- function(graph, buses_lost, step_num, fire_affected = 
     # Cascade metrics
     fire_count <- length(fire_affected)
     cascade_count <- length(deenergized)
-    total_lost <- length(buses_lost)
+    total_lost_count <- length(buses_lost) # Use a different name to avoid conflict
     cascade_ratio <- if (fire_count > 0) cascade_count / fire_count else 0
     
+    # CORRECTED: Return a clean, consistent dataframe
     return(data.frame(
       step = step_num,
       vertices_remaining = n_vertices,
@@ -846,12 +1054,9 @@ calculate_step_metrics <- function(graph, buses_lost, step_num, fire_affected = 
       gen_served_pct = pm$gen_served_pct,
       algebraic_connectivity = nm$algebraic_connectivity,
       avg_node_strength = nm$avg_node_strength,
-      buses_lost_count = total_lost,
+      buses_lost_count = total_lost_count,
       fire_affected = fire_count,
       deenergized = cascade_count,
-      direct_hits = fire_count,
-      buffer_hits = 0,
-      total_lost = total_lost,
       cascade_ratio = cascade_ratio
     ))
     
@@ -859,35 +1064,6 @@ calculate_step_metrics <- function(graph, buses_lost, step_num, fire_affected = 
     message("Error in parallel metrics calculation: ", e$message)
     return(create_default_metrics(step_num, buses_lost, fire_affected, deenergized))
   })
-}
-
-
-
-# Cleanup parallel resources
-cleanup_parallel_resources <- function() {
-  message("Cleaning up parallel processing resources...")
-  
-  # Stop doParallel cluster if exists
-  tryCatch({
-    foreach::registerDoSEQ()  # Switch back to sequential
-  }, error = function(e) {
-    message("Note: doParallel cleanup issue: ", e$message)
-  })
-  
-  # Reset future plan to sequential
-  tryCatch({
-    future::plan(future::sequential)
-  }, error = function(e) {
-    message("Note: future cleanup issue: ", e$message)
-  })
-  
-  # Reset data.table threads to 1
-  data.table::setDTthreads(1)
-  
-  # Force garbage collection
-  gc()
-  
-  message("✓ Parallel resources cleaned up")
 }
 
 
@@ -906,9 +1082,6 @@ create_default_metrics <- function(step_num, buses_lost, fire_affected, deenergi
     buses_lost_count = length(buses_lost),
     fire_affected = length(fire_affected),
     deenergized = length(deenergized),
-    direct_hits = 0,
-    buffer_hits = 0,
-    total_lost = length(buses_lost),
     cascade_ratio = 0
   ))
 }
@@ -934,7 +1107,7 @@ CascadeController <- R6::R6Class("CascadeController",
                                          fire_data = fire_data,  # Use raw fire_data instead of fire_polys_by_step
                                          buffer_km = buffer_km,
                                          steps = steps
-                                    
+                                         
                                        )
                                        
                                        self$progress <- 100
