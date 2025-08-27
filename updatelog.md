@@ -170,3 +170,6 @@ All because of a simple file name, always good to look though the program, lucki
 Some errors, it seems to be mostly UI bugs, so ill be working on updating that and getting rid of those issues. I am beginning to implement parallel processing and features related. 
 
 <img width="603" height="359" alt="{14E8F0C4-E779-42B1-8E6C-8FECB822723C}" src="https://github.com/user-attachments/assets/3dbaa17a-96e0-4784-a721-7ca46e5ecc07" />
+
+
+## 8/15 - Program checkpoint - End of REU
