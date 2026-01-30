@@ -28,6 +28,8 @@ library(ggplot2)
 library(tidyr)
 library(R6)
 
+setwd("~/REU-PSU-Research-Project/Programs/West_10k_program")
+
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
 monitor_connections <- function() {
@@ -1361,7 +1363,7 @@ add_date_and_step_info <- function(data) {
     data$date_only <- Sys.Date()
   }
   
-  #Use ICS209 data where available, fallback for others
+#Use ICS209 data where available, fallback for others
   if (has_ics209_periods) {
     data <- data %>%
       mutate(
@@ -2027,7 +2029,7 @@ create_color_palettes <- function() {
       domain = c("Generator", "Load", "Gen + Load", "Neither")
     )
     
-    # Existing fire intensity palette (keep as is)
+    # Fire intensity palette
     fire_intensity_pal <<- colorFactor(
       palette = c("Very Low" = "#ffffcc", "Low" = "#fed976", 
                   "Moderate" = "#feb24c", "High" = "#fd8d3c", 
@@ -2062,23 +2064,7 @@ create_color_palettes <- function() {
         domain = NULL
       )
     }
-    tda_dimension_colors <<- c(
-      "0" = "#E74C3C",  # Red for H0 (connected components) - circles
-      "1" = "#2E86AB",  # Blue for H1 (holes/cycles) - triangles  
-      "2" = "#27AE60"   # Green for H2 (voids) - squares
-    )
     
-    tda_dimension_shapes <<- c(
-      "0" = 16,  # Circle for H0
-      "1" = 17,  # Triangle for H1
-      "2" = 15   # Square for H2
-    )
-    
-    tda_dimension_labels <<- c(
-      "0" = "H₀ (Connected Components)", 
-      "1" = "H₁ (Holes/Cycles)", 
-      "2" = "H₂ (Voids)"
-    )
     # Landowner category color palette  
     attr_POOLandownerCategory_pal <<- colorFactor(
       palette = c("Federal" = "#2166ac", "State" = "#5aae61", "Private" = "#d73027",
@@ -2113,10 +2099,9 @@ create_color_palettes <- function() {
                                        domain = c("Low", "Moderate", "High"))
     
     # Fallback TDA colors
-    tda_dimension_colors <<- c("0" = "#E74C3C", "1" = "#2E86AB", "2" = "#27AE60")
-    tda_dimension_shapes <<- c("0" = 16, "1" = 17, "2" = 15)
-    tda_state_colors <<- c("Before" = "#2E86AB", "After" = "#E63946")
-    tda_impact_colors <<- c("Fire Impact" = "#E63946", "Cascade Failures" = "#06AED5")
+    tda_dimension_colors <<- c("0" = "blue", "1" = "red", "2" = "green")
+    tda_state_colors <<- c("Before" = "green", "After" = "red")
+    tda_impact_colors <<- c("Fire Impact" = "red", "Cascade Failures" = "blue")
   })
 }
 if (!exists("system_initialized") || !system_initialized) {

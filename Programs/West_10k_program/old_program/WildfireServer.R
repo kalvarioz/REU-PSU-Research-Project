@@ -14,7 +14,7 @@ library(sf)
 library(dplyr)
 library(shinyjs)
 
-source("global.R")
+source("Global.R")
 source("AttackAndCascade.R")
 source("TopologicalDataWorkflowWF.R")
 
@@ -2529,7 +2529,7 @@ summarize_tda_results <- function(results) {
 # ====================================================================
 
 render_output_functions <- function(output, values, input, selected_fire, selected_state = NULL) {
-  output$tda_comparison_plot <- renderPlot({
+    output$tda_comparison_plot <- renderPlot({
     req(values$tda_results)
     
     tryCatch({
@@ -2551,19 +2551,7 @@ render_output_functions <- function(output, values, input, selected_fire, select
         }
       }
       
-      # Fallback: create enhanced comparison plot if data is available
-      if (!is.null(values$tda_results$before_persistence_data) && 
-          !is.null(values$tda_results$after_persistence_data)) {
-        
-        return(create_before_after_comparison(
-          values$tda_results$before_persistence_data,
-          values$tda_results$after_persistence_data,
-          values$tda_results$fire_name,
-          values$tda_results$wasserstein_distance
-        ))
-      }
-      
-      # Final fallback: simple comparison
+      # Fallback: create comparison plot if data is available
       if (!is.null(values$tda_results$before_features) && 
           !is.null(values$tda_results$after_features)) {
         
@@ -2574,7 +2562,7 @@ render_output_functions <- function(output, values, input, selected_fire, select
         )
         
         ggplot(comparison_data, aes(x = State, y = Features, fill = State)) +
-          geom_col(alpha = 0.8, width = 0.6) +
+          geom_col(alpha = 0.8) +
           scale_fill_manual(values = c("Before" = "#2E86AB", "After" = "#E63946")) +
           labs(
             title = "TDA Feature Comparison",
@@ -2582,11 +2570,8 @@ render_output_functions <- function(output, values, input, selected_fire, select
                              round(values$tda_results$wasserstein_distance, 4)),
             y = "Number of Features"
           ) +
-          theme_minimal(base_size = 12) +
-          theme(
-            legend.position = "none",
-            plot.title = element_text(size = 14, face = "bold")
-          )
+          theme_minimal() +
+          theme(legend.position = "none")
       } else {
         ggplot() + 
           annotate("text", x = 0.5, y = 0.5, label = "No TDA comparison data available") +
@@ -3069,7 +3054,7 @@ render_output_functions <- function(output, values, input, selected_fire, select
         }
       }
       
-      # Fallback: create enhanced plot from persistence data
+      # Fallback: create from persistence data
       if (!is.null(values$tda_results$after_features)) {
         diagram <- values$tda_results$persistence_data
       } else {
@@ -3078,23 +3063,51 @@ render_output_functions <- function(output, values, input, selected_fire, select
       
       if (is.null(diagram) || nrow(diagram) == 0) {
         return(ggplot() + 
-                 annotate("text", x = 0.5, y = 0.5, 
-                          label = "No persistent features found", 
-                          size = 6, color = "gray50") +
-                 theme_minimal() +
-                 labs(title = "TDA Persistence Diagram"))
+                 annotate("text", x = 0.5, y = 0.5, label = "No persistent features found") +
+                 theme_minimal())
       }
       
-      # Use the new enhanced plotting function
-      return(create_enhanced_tda_plot(diagram, "TDA Persistence Diagram"))
+      # Ensure correct column names
+      if (ncol(diagram) >= 3) {
+        colnames(diagram) <- c("Dimension", "Birth", "Death")
+        diagram <- as.data.frame(diagram)
+      }
+      
+      colors <- c("0" = "#2E86AB", "1" = "#E63946", "2" = "#2ca02c")
+      
+      p <- ggplot(diagram, aes(Birth, Death, color = factor(Dimension))) +
+        geom_point(size = 3, alpha = 0.7) +
+        geom_abline(slope = 1, intercept = 0, color = "gray50", linetype = "dashed") +
+        scale_color_manual(values = colors, name = "Dimension") +
+        coord_fixed(xlim = c(0, 1), ylim = c(0, 1)) +
+        labs(
+          title = "TDA Persistence Diagram",
+          subtitle = paste("Features:", nrow(diagram)),
+          x = "Birth (Normalized)",
+          y = "Death (Normalized)"
+        ) +
+        theme_minimal() +
+        theme(legend.position = "bottom")
+      
+      if (nrow(diagram) > 0) {
+        top_features <- diagram %>%
+          mutate(persistence = Death - Birth) %>%
+          arrange(desc(persistence)) %>%
+          head(3)
+        
+        if (nrow(top_features) > 0) {
+          p <- p + 
+            geom_point(data = top_features, 
+                       shape = 1, size = 5, stroke = 2, color = "red", alpha = 0.8)
+        }
+      }
+      
+      return(p)
       
     }, error = function(e) {
       ggplot() + 
-        annotate("text", x = 0.5, y = 0.5, 
-                 label = paste("TDA Error:", e$message), 
-                 size = 4, color = "red") +
-        theme_minimal() +
-        labs(title = "TDA Analysis Error")
+        annotate("text", x = 0.5, y = 0.5, label = paste("TDA Error:", e$message)) +
+        theme_minimal()
     })
   })
   
@@ -3168,7 +3181,7 @@ render_output_functions <- function(output, values, input, selected_fire, select
   # ====================================================================
   # ENHANCED DOWNLOAD HANDLERS
   # ====================================================================
-  output$download_tda_plots <- downloadHandler(
+    output$download_tda_plots <- downloadHandler(
     filename = function() {
       fire_name <- if (!is.null(input$fire_events) && length(input$fire_events) > 0) {
         if (length(input$fire_events) > 1) {
@@ -3436,10 +3449,13 @@ server <- function(input, output, session) {
     showNotification("System initialization error", type = "error")
     return()
   })
+  
   # 2. Initialize server state
   values <- initialize_server_state()
+  
   # 3. Setup reactive values
   selected_state <- reactiveVal(NULL)
+  
   # 4. Setup UI state management
   tryCatch({
     initialize_ui_state()
@@ -3575,6 +3591,7 @@ server <- function(input, output, session) {
 ui <- fluidPage(
   # Enable shinyjs
   useShinyjs(),
+  
   titlePanel("Enhanced Wildfire Grid Resilience Explorer"),
   tags$head(tags$style(
     HTML(
@@ -4124,7 +4141,7 @@ ui <- fluidPage(
           p("Topological features before/after wildfire impact.", style = "font-size: 11px; color: #666; margin-top: 5px;")
         )
       )),
-      
+
       
       # Second row of plots
       fluidRow(style = "margin-bottom: 30px;", column(
