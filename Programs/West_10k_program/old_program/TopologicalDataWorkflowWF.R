@@ -74,71 +74,7 @@ validate_bus_data_integrity <- function(buses_sf) {
   
   return(TRUE)
 }
-create_comprehensive_tda_visualization_set <- function(cascade_results, tda_before, tda_after, 
-                                                       fire_name, analysis_params) {
-  plots_list <- list()
-  
-  # 1. Before/After Comparison (main plot)
-  if (!is.null(tda_before$persistence_data) && !is.null(tda_after$persistence_data)) {
-    plots_list$comparison <- create_before_after_comparison(
-      tda_before$persistence_data, 
-      tda_after$persistence_data, 
-      fire_name, 
-      analysis_params$wasserstein_distance
-    )
-  }
-  
-  # 2. Individual persistence diagrams
-  if (!is.null(tda_before$persistence_data)) {
-    plots_list$persistence_before <- plot_persistence_diagram(
-      tda_before$persistence_data, 
-      "(Before Fire)"
-    )
-  }
-  
-  if (!is.null(tda_after$persistence_data)) {
-    plots_list$persistence_after <- plot_persistence_diagram(
-      tda_after$persistence_data, 
-      "(After Fire & Cascade)"
-    )
-  }
-  
-  # 3. Cascade progression plot (if metrics available)
-  if (!is.null(cascade_results$metrics) && nrow(cascade_results$metrics) > 0) {
-    plots_list$cascade_progression <- create_cascade_progression_plot(
-      cascade_results$metrics, 
-      fire_name, 
-      analysis_params$is_compound_event
-    )
-  }
-  
-  # 4. Topological summary
-  plots_list$summary <- create_topological_summary(
-    if(!is.null(tda_before$persistence_data)) nrow(tda_before$persistence_data) else 0,
-    if(!is.null(tda_after$persistence_data)) nrow(tda_after$persistence_data) else 0,
-    analysis_params$wasserstein_distance,
-    fire_name,
-    analysis_params$is_compound_event
-  )
-  
-  # 5. Compound event specific plot (if applicable)
-  if (analysis_params$is_compound_event) {
-    plots_list$compound_event <- create_compound_event_plot(
-      analysis_params, 
-      cascade_results, 
-      fire_name
-    )
-  }
-  
-  # 6. Dashboard plot
-  plots_list$dashboard <- create_integrated_dashboard(
-    plots_list, 
-    fire_name, 
-    analysis_params
-  )
-  
-  return(plots_list)
-}
+
 run_fixed_smart_tda_workflow <- function(fire_data, bus_info, graph_original,
                                          analysis_radius_km = 30,
                                          fire_impact_buffer_km = 2,
@@ -179,7 +115,7 @@ run_fixed_smart_tda_workflow <- function(fire_data, bus_info, graph_original,
     cascade_results <- existing_cascade_results
     message("[1/6] Using existing, complete cascade results.")
   } else {
-    message("[1/6] Running cascade simulation to ensure full metrics are available...")
+    message("[1/6] Running ENHANCED cascade simulation to ensure full metrics are available...")
     # This is the key call. We are explicitly running the most comprehensive cascade function.
     cascade_results <- run_enhanced_fire_cascade(
       graph = graph_original,
@@ -304,7 +240,7 @@ run_fixed_smart_tda_workflow <- function(fire_data, bus_info, graph_original,
     }
   }
   
-  message("[SUCCESS] Unified TDA & Cascade Workflow Complete")
+  message("✓ Unified TDA & Cascade Workflow Complete")
   
   return(list(
     success = TRUE,
@@ -330,72 +266,31 @@ plot_persistence_diagram <- function(diagram, title_suffix = "") {
   colnames(df) <- c("Dimension", "Birth", "Death")
   df$Persistence <- df$Death - df$Birth
   
-  # Debug: Print dimension information
-  message("DEBUG: Persistence diagram dimensions found: ", paste(unique(df$Dimension), collapse = ", "))
-  message("DEBUG: Feature counts by dimension: ")
-  dim_counts <- table(df$Dimension)
-  for(i in names(dim_counts)) {
-    message("  Dimension ", i, ": ", dim_counts[i], " features")
-  }
+  # Color palette for dimensions
+  colors <- c("0" = "#2E86AB", "1" = "#E63946", "2" = "#2ca02c")
   
-  # Ensure dimension is factor for proper mapping
-  df$Dimension <- as.factor(df$Dimension)
-  
-  # Define consistent colors and shapes for dimensions
-  dimension_colors <- c("0" = "#E74C3C", "1" = "#2E86AB", "2" = "#27AE60")
-  dimension_shapes <- c("0" = 16, "1" = 17, "2" = 15)
-  
-  # Create proper dimension labels
-  dimension_labels <- c("0" = "H₀ (Connected Components)", 
-                        "1" = "H₁ (Holes/Cycles)", 
-                        "2" = "H₂ (Voids)")
-  
-  # Filter available dimensions for cleaner legend
-  available_dims <- unique(df$Dimension)
-  available_colors <- dimension_colors[available_dims]
-  available_shapes <- dimension_shapes[available_dims]
-  available_labels <- dimension_labels[available_dims]
-  
-  p <- ggplot(df, aes(x = Birth, y = Death, 
-                      color = Dimension, 
-                      shape = Dimension)) +
-    geom_point(size = 4, alpha = 0.8, stroke = 1.2) +
-    geom_abline(slope = 1, intercept = 0, color = "gray50", linetype = "dashed", linewidth = 1) +
-    
-    # Use manual scales for colors and shapes - FIXED: No conflicting override.aes
-    scale_color_manual(values = available_colors, 
-                       name = "Topological Dimension",
-                       labels = available_labels) +
-    scale_shape_manual(values = available_shapes, 
-                       name = "Topological Dimension",
-                       labels = available_labels) +
-    
+  ggplot(df, aes(x = Birth, y = Death, color = factor(Dimension), size = Persistence)) +
+    geom_point(alpha = 0.7) +
+    geom_abline(slope = 1, intercept = 0, color = "gray50", linetype = "dashed", size = 1) +
+    scale_color_manual(values = colors, name = "Dimension") +
+    scale_size_continuous(range = c(2, 5), guide = "legend") +
     coord_fixed(xlim = c(0, 1), ylim = c(0, 1)) +
     labs(
       title = paste("Persistence Diagram", title_suffix),
       x = "Birth Time",
       y = "Death Time",
-      subtitle = paste("Total features:", nrow(df), "| Dimensions:", paste(available_dims, collapse = ", "))
+      subtitle = paste("Total features:", nrow(df))
     ) +
-    theme_minimal(base_size = 12) +
+    theme_minimal() +
     theme(
       plot.title = element_text(size = 14, face = "bold"),
       plot.subtitle = element_text(size = 12),
-      legend.position = "bottom",
-      legend.title = element_text(face = "bold"),
-      panel.grid.minor = element_blank(),
-      panel.border = element_rect(color = "grey80", fill = NA),
-      legend.key.size = unit(0.8, "cm")
-    ) +
-    # FIXED: Single guide specification to avoid conflicts
-    guides(color = guide_legend(override.aes = list(size = 5)),
-           shape = guide_legend(override.aes = list(size = 5)))
-  
-  return(p)
+      legend.position = "right",
+      panel.grid.minor = element_blank()
+    )
 }
-
 safe_spatial_intersection <- function(points_sf, polygon_sf, method = "within") {
-  message("=== SPATIAL INTERSECTION ===")
+  message("=== ENHANCED SAFE SPATIAL INTERSECTION ===")
   message("Points: ", nrow(points_sf), ", Polygons: ", nrow(polygon_sf))
   
   # Input validation
@@ -609,138 +504,30 @@ create_before_after_comparison <- function(before_data, after_data, fire_name, w
   
   combined_df <- rbind(before_df, after_df)
   
-  # Debug information
-  message("DEBUG: Before/After comparison data:")
-  message("  Before dimensions: ", paste(unique(before_df$Dimension), collapse = ", "))
-  message("  After dimensions: ", paste(unique(after_df$Dimension), collapse = ", "))
-  message("  Combined unique dimensions: ", paste(unique(combined_df$Dimension), collapse = ", "))
+  # Color palette
+  dimension_colors <- c("0" = "#2E86AB", "1" = "#E63946", "2" = "#2ca02c")
   
-  # Ensure dimension is factor
-  combined_df$Dimension <- as.factor(combined_df$Dimension)
-  
-  # Define consistent colors and shapes for dimensions
-  dimension_colors <- c("0" = "#E74C3C", "1" = "#2E86AB", "2" = "#27AE60")
-  dimension_shapes <- c("0" = 16, "1" = 17, "2" = 15)
-  dimension_labels <- c("0" = "H₀ (Connected Components)", 
-                        "1" = "H₁ (Holes/Cycles)", 
-                        "2" = "H₂ (Voids)")
-  
-  # Filter to available dimensions
-  available_dims <- unique(combined_df$Dimension)
-  available_colors <- dimension_colors[available_dims]
-  available_shapes <- dimension_shapes[available_dims]
-  available_labels <- dimension_labels[available_dims]
-  
-  p <- ggplot(combined_df, aes(x = Birth, y = Death, 
-                               color = Dimension, 
-                               shape = Dimension)) +
-    geom_point(size = 4, alpha = 0.8, stroke = 1.2) +
-    geom_abline(slope = 1, intercept = 0, color = "gray50", linetype = "dashed", linewidth = 1) +
-    
-    # Use manual scales for colors and shapes
-    scale_color_manual(values = available_colors, 
-                       name = "Topological Dimension",
-                       labels = available_labels) +
-    scale_shape_manual(values = available_shapes, 
-                       name = "Topological Dimension",
-                       labels = available_labels) +
-    
+  ggplot(combined_df, aes(x = Birth, y = Death, color = factor(Dimension), size = Persistence)) +
+    geom_point(alpha = 0.7) +
+    geom_abline(slope = 1, intercept = 0, color = "gray50", linetype = "dashed", size = 1) +
+    scale_color_manual(values = dimension_colors, name = "Dimension") +
+    scale_size_continuous(range = c(1.5, 4), guide = "legend") +
     coord_fixed(xlim = c(0, 1), ylim = c(0, 1)) +
     facet_wrap(~ State, ncol = 2) +
     labs(
       title = paste("TDA Comparison:", fire_name),
-      subtitle = paste("Wasserstein Distance:", round(wasserstein_dist, 4), 
-                       "| Dimensions:", paste(available_dims, collapse = ", ")),
+      subtitle = paste("Wasserstein Distance:", round(wasserstein_dist, 4)),
       x = "Birth Time",
       y = "Death Time"
     ) +
-    theme_minimal(base_size = 12) +
-    theme(
-      plot.title = element_text(size = 16, face = "bold"),
-      plot.subtitle = element_text(size = 12),
-      strip.text = element_text(size = 14, face = "bold"),
-      legend.position = "bottom",
-      legend.title = element_text(face = "bold"),
-      panel.grid.minor = element_blank(),
-      panel.border = element_rect(color = "grey80", fill = NA),
-      legend.key.size = unit(0.8, "cm")
-    ) +
-    # Fixed: Single guide specification
-    guides(color = guide_legend(override.aes = list(size = 5)),
-           shape = guide_legend(override.aes = list(size = 5)))
-  
-  return(p)
-}
-
-create_enhanced_tda_plot <- function(diagram, title = "Persistence Diagram") {
-  if (is.null(diagram) || nrow(diagram) == 0) {
-    return(ggplot() + 
-             annotate("text", x = 0.5, y = 0.5, 
-                      label = "No persistent features found", 
-                      size = 6, color = "gray50") +
-             theme_minimal() +
-             labs(title = title))
-  }
-  
-  # Ensure correct column names
-  if (ncol(diagram) >= 3) {
-    colnames(diagram) <- c("Dimension", "Birth", "Death")
-    diagram <- as.data.frame(diagram)
-  }
-  
-  # Define consistent visualization
-  dimension_colors <- c("0" = "#E74C3C", "1" = "#2E86AB", "2" = "#27AE60")
-  dimension_shapes <- c("0" = 16, "1" = 17, "2" = 15)
-  dimension_labels <- c("0" = "H₀ (Components)", 
-                        "1" = "H₁ (Cycles)", 
-                        "2" = "H₂ (Voids)")
-  
-  p <- ggplot(diagram, aes(x = Birth, y = Death, 
-                           color = factor(Dimension), 
-                           shape = factor(Dimension))) +
-    geom_point(size = 4, alpha = 0.8, stroke = 1.2) +
-    geom_abline(slope = 1, intercept = 0, color = "gray50", linetype = "dashed") +
-    scale_color_manual(values = dimension_colors, 
-                       name = "Dimension",
-                       labels = function(x) dimension_labels[x]) +
-    scale_shape_manual(values = dimension_shapes, 
-                       name = "Dimension", 
-                       labels = function(x) dimension_labels[x]) +
-    coord_fixed(xlim = c(0, 1), ylim = c(0, 1)) +
-    labs(
-      title = title,
-      subtitle = paste("Features:", nrow(diagram)),
-      x = "Birth Time (Normalized)",
-      y = "Death Time (Normalized)"
-    ) +
-    theme_minimal(base_size = 12) +
+    theme_minimal() +
     theme(
       plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 12),
+      strip.text = element_text(size = 12, face = "bold"),
       legend.position = "bottom",
-      panel.grid.minor = element_blank(),
-      legend.title = element_text(face = "bold")
-    ) +
-    guides(
-      color = guide_legend(override.aes = list(size = 5)),
-      shape = guide_legend(override.aes = list(size = 5))
+      panel.grid.minor = element_blank()
     )
-  
-  # Highlight most persistent features with a subtle outline
-  if (nrow(diagram) > 0) {
-    diagram$persistence <- diagram$Death - diagram$Birth
-    top_features <- diagram %>%
-      arrange(desc(persistence)) %>%
-      head(min(3, nrow(diagram)))  # Show top 3 or fewer if less available
-    
-    if (nrow(top_features) > 0) {
-      p <- p + 
-        geom_point(data = top_features, 
-                   shape = 1, size = 6, stroke = 2, 
-                   color = "black", alpha = 0.6)
-    }
-  }
-  
-  return(p)
 }
 
 create_cascade_progression_plot <- function(metrics, fire_name, is_compound) {
@@ -1340,11 +1127,13 @@ generate_local_power_matrix <- function(local_bus_data, method = "enhanced_multi
           }
         }
       }
+      
       matrix_result
       
     } else {
       # Simpler fallback method
       power_values <- local_bus_power$net_power
+      
       # Add variation if power is too uniform
       if (var(power_values) < 1e-6) {
         power_values <- power_values + rnorm(n_buses, 0, 1)
@@ -1356,6 +1145,7 @@ generate_local_power_matrix <- function(local_bus_data, method = "enhanced_multi
   }, error = function(e) {
     message("ERROR in matrix creation: ", e$message)
     message("Creating fallback matrix...")
+    
     # Create a simple random matrix as absolute fallback
     fallback_matrix <- matrix(runif(n_buses * n_buses, 0, 1), n_buses, n_buses)
     diag(fallback_matrix) <- 0
@@ -1367,9 +1157,11 @@ generate_local_power_matrix <- function(local_bus_data, method = "enhanced_multi
     message("CRITICAL ERROR: Matrix creation failed completely")
     return(matrix(c(0, 0.1, 0.1, 0), nrow = 2, ncol = 2))
   }
+  
   # Normalize to [0,1] range while preserving structure
   max_val <- max(power_diff_matrix, na.rm = TRUE)
   min_val <- min(power_diff_matrix[power_diff_matrix > 0], na.rm = TRUE)
+  
   if (!is.finite(max_val) || !is.finite(min_val) || max_val <= min_val) {
     message("WARNING: Invalid matrix values, using random matrix")
     power_diff_matrix <- matrix(runif(n_buses * n_buses, 0, 1), n_buses, n_buses)
@@ -1378,20 +1170,23 @@ generate_local_power_matrix <- function(local_bus_data, method = "enhanced_multi
     power_diff_matrix <- (power_diff_matrix - min_val) / (max_val - min_val)
     diag(power_diff_matrix) <- 0
   }
+  
   # Final statistics
   final_var <- var(as.vector(power_diff_matrix), na.rm = TRUE)
   final_min <- min(power_diff_matrix, na.rm = TRUE)
   final_max <- max(power_diff_matrix, na.rm = TRUE)
-  message("  ENHANCED MATRIX GENERATION COMPLETE:")
+  
+  message("✓ ENHANCED MATRIX GENERATION COMPLETE:")
   message("  Size: ", n_buses, "×", n_buses)
   message("  Range: [", round(final_min, 6), ", ", round(final_max, 6), "]")
   message("  Variance: ", sprintf("%.2e", final_var))
   message("  Non-zero elements: ", sum(power_diff_matrix > 1e-10, na.rm = TRUE))
+  
   # Quality check
   if (final_var > 1e-4 && is.finite(final_var)) {
-    message("[SUCCESS] Matrix has sufficient variance for meaningful TDA")
+    message("✓ Matrix has sufficient variance for meaningful TDA")
   } else {
-    message("[WARNING] Matrix variance may be low, but analysis will proceed")
+    message("⚠ Matrix variance may be low, but analysis will proceed")
   }
   
   return(power_diff_matrix)
@@ -1401,6 +1196,7 @@ generate_local_power_matrix <- function(local_bus_data, method = "enhanced_multi
 # PERSEUS FILE I/O FUNCTIONS
 # =================================================================================================
 run_perseus <- function(input_file = NULL, output_prefix = NULL) {
+  
   # Use the config from global.R
   if (exists("tda_config") && "simple_perseus" %in% names(tda_config)) {
     cfg <- tda_config$simple_perseus
@@ -1430,10 +1226,13 @@ run_perseus <- function(input_file = NULL, output_prefix = NULL) {
   # Run Perseus exactly like working code
   perseus_cmd <- paste(cfg$perseus_exe, "distmat", input_file, output_prefix)
   message("Running Perseus: ", perseus_cmd)
+  
   result <- system(perseus_cmd, intern = TRUE)
+  
   # Check outputs
   expected_files <- paste0(output_prefix, "_", 0:2, ".txt")
   existing_files <- file.exists(expected_files)
+  
   message("Perseus execution complete")
   for (i in seq_along(expected_files)) {
     if (existing_files[i]) {
@@ -1448,79 +1247,82 @@ run_perseus <- function(input_file = NULL, output_prefix = NULL) {
 write_enhanced_perseus_file <- function(adjacency_matrix, output_dir) {
   # Use the same function as before but with enhanced debugging
   cfg <- perseus_config
+  
   if (is.null(output_dir)) {
     output_dir <- cfg$outputs_dir
   }
+  
   dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+  
   A2 <- as.matrix(adjacency_matrix)
   A2[A2 == 0] <- 999
   diag(A2) <- 0
+  
   d <- nrow(A2)
+  
   output_file <- file.path(output_dir, "M.txt")
+  
   # Write file
   cat(d, file = output_file, append = FALSE, sep = '\n')
   cat(paste(cfg$g, cfg$s, cfg$N, cfg$C, sep = ' '), 
       file = output_file, append = TRUE, sep = '\n')
   cat(as.vector(A2), file = output_file, append = TRUE)
+  
   message("✓ Enhanced Perseus file written: ", output_file)
   message("  Matrix size: ", d, "×", d)
   message("  Parameters: g=", cfg$g, ", s=", cfg$s, ", N=", cfg$N, ", C=", cfg$C)
+  
   return(output_file)
 }
 
 # FIXED: Read Perseus outputs matching exact format (Moutput_0.txt, etc.)
 read_perseus_outputs <- function(output_prefix) {
-  message("=== ENHANCED PERSEUS OUTPUT READING WITH DEBUGGING ===")
+  message("=== ENHANCED PERSEUS OUTPUT READING ===")
   message("Reading from prefix: ", output_prefix)
+  
   P <- NULL
   filt_len <- perseus_config$N
   total_features <- 0
-  # Check what files exist and debug them
+  
+  # Check what files exist
   dim0_file <- paste0(output_prefix, "_0.txt")
   dim1_file <- paste0(output_prefix, "_1.txt")
-  dim2_file <- paste0(output_prefix, "_2.txt")
+  
   message("Checking Perseus output files:")
   message("  Dimension 0 file: ", dim0_file, " (exists: ", file.exists(dim0_file), ")")
   message("  Dimension 1 file: ", dim1_file, " (exists: ", file.exists(dim1_file), ")")
-  message("  Dimension 2 file: ", dim2_file, " (exists: ", file.exists(dim2_file), ")")
-  # Process dimension 0 features (connected components)
+  
   if (file.exists(dim0_file)) {
     file_size <- file.info(dim0_file)$size
-    message("Processing Dimension 0 file (size: ", file_size, " bytes)")
+    message("    Size: ", file_size, " bytes")
+    
     if (file_size > 0) {
       tryCatch({
+        # Read with more robust parsing
         dim0_lines <- readLines(dim0_file)
         message("    Raw lines read: ", length(dim0_lines))
+        
         if (length(dim0_lines) > 0) {
-          # Show sample lines for debugging
-          message("    Sample lines from dim 0 file:")
-          for (i in 1:min(5, length(dim0_lines))) {
-            message("      Line ", i, ": '", dim0_lines[i], "'")
-          }
           # Parse lines manually for better control
           dim0_data <- do.call(rbind, lapply(dim0_lines, function(line) {
             parts <- strsplit(trimws(line), "\\s+")[[1]]
             if (length(parts) >= 2) {
-              birth <- as.numeric(parts[1])
-              death <- as.numeric(parts[2])
-              if (!is.na(birth) && !is.na(death)) {
-                return(c(birth, death))
-              }
+              return(c(as.numeric(parts[1]), as.numeric(parts[2])))
             }
             return(NULL)
           }))
+          
           if (!is.null(dim0_data) && nrow(dim0_data) > 0) {
             dim0_matrix <- as.matrix(dim0_data)
-            message("    Successfully parsed ", nrow(dim0_matrix), " dimension 0 features")
+            
             # Process birth/death times
             dim0_matrix[dim0_matrix[, 2] == -1, 2] <- filt_len + 1
             dim0_matrix <- dim0_matrix / (filt_len + 1)
-            # Add dimension column (0 for connected components)
+            
+            # Add dimension column
             P <- cbind(rep(0, nrow(dim0_matrix)), dim0_matrix)
             total_features <- total_features + nrow(dim0_matrix)
             message("  ✓ Dimension 0: ", nrow(dim0_matrix), " features loaded successfully")
-          } else {
-            message("    No valid dimension 0 data found after parsing")
           }
         }
       }, error = function(e) {
@@ -1529,132 +1331,61 @@ read_perseus_outputs <- function(output_prefix) {
     }
   }
   
-  # Process dimension 1 features (holes/cycles)
+  # Read dimension 1 with same robust approach
   if (file.exists(dim1_file)) {
     file_size <- file.info(dim1_file)$size
-    message("Processing Dimension 1 file (size: ", file_size, " bytes)")
+    message("    Size: ", file_size, " bytes")
+    
     if (file_size > 0) {
       tryCatch({
         dim1_lines <- readLines(dim1_file)
         message("    Raw lines read: ", length(dim1_lines))
+        
         if (length(dim1_lines) > 0) {
-          # Show sample lines for debugging
-          message("    Sample lines from dim 1 file:")
-          for (i in 1:min(3, length(dim1_lines))) {
-            message("      Line ", i, ": '", dim1_lines[i], "'")
-          }
           dim1_data <- do.call(rbind, lapply(dim1_lines, function(line) {
             parts <- strsplit(trimws(line), "\\s+")[[1]]
             if (length(parts) >= 2) {
-              birth <- as.numeric(parts[1])
-              death <- as.numeric(parts[2])
-              if (!is.na(birth) && !is.na(death)) {
-                return(c(birth, death))
-              }
+              return(c(as.numeric(parts[1]), as.numeric(parts[2])))
             }
             return(NULL)
           }))
+          
           if (!is.null(dim1_data) && nrow(dim1_data) > 0) {
             dim1_matrix <- as.matrix(dim1_data)
-            message("    Successfully parsed ", nrow(dim1_matrix), " dimension 1 features")
+            
             # Process birth/death times
             dim1_matrix[dim1_matrix[, 2] == -1, 2] <- filt_len + 1
             dim1_matrix <- dim1_matrix / (filt_len + 1)
-            # Add dimension column (1 for holes/cycles) and combine
+            
+            # Add dimension column and combine
             dim1_with_dim <- cbind(rep(1, nrow(dim1_matrix)), dim1_matrix)
             P <- rbind(P, dim1_with_dim)
             total_features <- total_features + nrow(dim1_matrix)
             message("  ✓ Dimension 1: ", nrow(dim1_matrix), " features loaded successfully")
-          } else {
-            message("    No valid dimension 1 data found after parsing")
           }
         }
       }, error = function(e) {
         message("  ✗ Error reading dimension 1 file: ", e$message)
       })
-    } else {
-      message("    Dimension 1 file is empty")
     }
   }
   
-  # Process dimension 2 features (voids) if available
-  if (file.exists(dim2_file)) {
-    file_size <- file.info(dim2_file)$size
-    message("Processing Dimension 2 file (size: ", file_size, " bytes)")
-    if (file_size > 0) {
-      tryCatch({
-        dim2_lines <- readLines(dim2_file)
-        message("    Raw lines read: ", length(dim2_lines))
-        if (length(dim2_lines) > 0) {
-          message("    Sample lines from dim 2 file:")
-          for (i in 1:min(3, length(dim2_lines))) {
-            message("      Line ", i, ": '", dim2_lines[i], "'")
-          }
-          dim2_data <- do.call(rbind, lapply(dim2_lines, function(line) {
-            parts <- strsplit(trimws(line), "\\s+")[[1]]
-            if (length(parts) >= 2) {
-              birth <- as.numeric(parts[1])
-              death <- as.numeric(parts[2])
-              if (!is.na(birth) && !is.na(death)) {
-                return(c(birth, death))
-              }
-            }
-            return(NULL)
-          }))
-          
-          if (!is.null(dim2_data) && nrow(dim2_data) > 0) {
-            dim2_matrix <- as.matrix(dim2_data)
-            message("    Successfully parsed ", nrow(dim2_matrix), " dimension 2 features")
-            # Process birth/death times
-            dim2_matrix[dim2_matrix[, 2] == -1, 2] <- filt_len + 1
-            dim2_matrix <- dim2_matrix / (filt_len + 1)
-            # Add dimension column (2 for voids) and combine
-            dim2_with_dim <- cbind(rep(2, nrow(dim2_matrix)), dim2_matrix)
-            P <- rbind(P, dim2_with_dim)
-            total_features <- total_features + nrow(dim2_matrix)
-            message("  ✓ Dimension 2: ", nrow(dim2_matrix), " features loaded successfully")
-          } else {
-            message("    No valid dimension 2 data found after parsing")
-          }
-        }
-      }, error = function(e) {
-        message("  ✗ Error reading dimension 2 file: ", e$message)
-      })
-    } else {
-      message("    Dimension 2 file is empty")
-    }
-  }
-  
-  # Final validation and summary
+  # Final validation
   if (is.null(P) || nrow(P) == 0) {
     P <- matrix(nrow = 0, ncol = 3)  
-    message("    WARNING: No persistence features found in Perseus output files")
+    message("  ⚠ WARNING: No persistence features found in Perseus output files")
     message("    This might indicate:")
     message("      - Perseus execution failed silently")
     message("      - Input matrix had no topological structure") 
     message("      - Perseus parameters need adjustment")
-    message("      - Input data is too small or uniform")
   } else {
-    message("     TOTAL FEATURES LOADED: ", total_features)
-    
-    # Show summary by dimension
-    if (nrow(P) > 0) {
-      dimension_summary <- table(P[, 1])
-      message("  Feature summary by dimension:")
-      for (dim in names(dimension_summary)) {
-        dim_name <- switch(dim,
-                           "0" = "H₀ (Connected Components)",
-                           "1" = "H₁ (Holes/Cycles)", 
-                           "2" = "H₂ (Voids)",
-                           paste("Dimension", dim))
-        message("    ", dim_name, ": ", dimension_summary[dim], " features")
-      }
-    }
+    message("  ✓ TOTAL FEATURES LOADED: ", total_features)
   }
   
   colnames(P) <- c("dimension", "birth", "death")
   return(P)
 }
+
 
 # =================================================================================================
 # RESULTS SAVING FUNCTIONS
@@ -1663,7 +1394,9 @@ read_perseus_outputs <- function(output_prefix) {
 # Enhanced save function
 save_results_tda_fixed <- function(diagram, cfg) {
   message("Saving analysis results...")
+  
   features_file <- file.path(cfg$outputs_dir, "persistence_features.csv")
+  
   if (nrow(diagram) > 0) {
     df <- as.data.frame(diagram)
     colnames(df) <- c("Dimension", "Birth", "Death")
@@ -1671,12 +1404,15 @@ save_results_tda_fixed <- function(diagram, cfg) {
     fwrite(df, features_file)
     message("✓ Persistence features saved: ", features_file)
   }
+  
   summary_file <- file.path(cfg$outputs_dir, "analysis_summary.txt")
+  
   sink(summary_file)
   cat("=== CORRECTED Net Power Perseus Analysis ===\n")
   cat("Analysis date:", as.character(Sys.time()), "\n")
   cat("Input file:", cfg$net_power_csv, "\n")
   cat("Perseus executable:", cfg$perseus_exe, "\n\n")
+  
   cat("Parameters:\n")
   cat("  Max dimension:", cfg$max_dim, "\n")
   cat("  Filtration steps (N):", cfg$N, "\n")
@@ -1685,14 +1421,17 @@ save_results_tda_fixed <- function(diagram, cfg) {
   cat("  Connectivity (C):", cfg$C, "\n")
   cat("  Downsample limit:", cfg$downsample_max_pts, "\n")
   cat("  Timeout (seconds):", cfg$timeout_seconds, "\n\n")
+  
   if (nrow(diagram) > 0) {
     cat("Results:\n")
     cat("  Total features:", nrow(diagram), "\n")
+    
     df <- as.data.frame(diagram)
     feature_counts <- table(df[,1])
     for (dim in names(feature_counts)) {
       cat("  Dimension", dim, "features:", feature_counts[dim], "\n")
     }
+    
     cat("\nMost persistent features:\n")
     df$persistence <- df[,3] - df[,2]
     top_features <- df[order(df$persistence, decreasing = TRUE), ]
@@ -1705,6 +1444,7 @@ save_results_tda_fixed <- function(diagram, cfg) {
     cat("Results: No persistent features found\n")
   }
   sink()
+  
   message("✓ Analysis summary saved: ", summary_file)
 }
 
@@ -1712,10 +1452,13 @@ save_results_tda_fixed <- function(diagram, cfg) {
 # MAIN ANALYSIS FUNCTION
 # =================================================================================================
 run_perseus_analysis <- function(distance_matrix, output_dir = NULL) {
+  
   if (is.null(output_dir)) output_dir <- perseus_config$outputs_dir
   dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
-  message("=== ENHANCED PERSEUS ANALYSIS ===")
+  
+  message("=== ENHANCED PERSEUS ANALYSIS WITH DEBUGGING ===")
   message("Input matrix size: ", nrow(distance_matrix), "×", ncol(distance_matrix))
+  
   # Enhanced matrix validation
   if (nrow(distance_matrix) < 2) {
     message("WARNING: Matrix too small for meaningful TDA analysis")
@@ -1728,38 +1471,48 @@ run_perseus_analysis <- function(distance_matrix, output_dir = NULL) {
       method = "too_small"
     ))
   }
+  
   # Check matrix properties
   matrix_min <- min(distance_matrix, na.rm = TRUE)
   matrix_max <- max(distance_matrix, na.rm = TRUE)
   matrix_mean <- mean(distance_matrix, na.rm = TRUE)
   matrix_var <- var(as.vector(distance_matrix), na.rm = TRUE)
+  
   message("Matrix statistics:")
   message("  Range: [", round(matrix_min, 4), ", ", round(matrix_max, 4), "]")
   message("  Mean: ", round(matrix_mean, 4))
   message("  Variance: ", round(matrix_var, 6))
+  
   # Check if matrix has sufficient variation
   if (matrix_var < 1e-10) {
     message("WARNING: Matrix has very low variance - may not produce meaningful TDA results")
   }
+  
   # Check for constant matrix (all same values)
   if (matrix_max - matrix_min < 1e-10) {
     message("WARNING: Matrix is nearly constant - this will not produce meaningful features")
     # Still proceed but warn user
   }
+  
   # Downsample if too large
   original_size <- nrow(distance_matrix)
   if (nrow(distance_matrix) > perseus_config$downsample_max_pts) {
     distance_matrix <- downsample_matrix(distance_matrix, perseus_config$downsample_max_pts)
     message("Matrix downsampled from ", original_size, " to ", nrow(distance_matrix), " points")
   }
+  
   tryCatch({
     # Write Perseus input file
     input_file <- write_enhanced_perseus_file(distance_matrix, output_dir)
     output_prefix <- file.path(output_dir, perseus_config$perseus_output_prefix)
+    
     # Run Perseus with timeout
     perseus_cmd <- paste(perseus_config$perseus_exe, "distmat", input_file, output_prefix)
     message("Executing Perseus: ", perseus_cmd)
+    
     system_result <- system(perseus_cmd, timeout = perseus_config$timeout_seconds)
+    
+    # *** CORRECTED LOGIC ***
     # If Perseus fails, return a failure object instead of calling an alternative function.
     if (system_result != 0) {
       message("Perseus execution failed with code: ", system_result)
@@ -1775,14 +1528,17 @@ run_perseus_analysis <- function(distance_matrix, output_dir = NULL) {
     
     # Read and process results with enhanced debugging
     persistence_data <- read_perseus_outputs(output_prefix)
-    message("  Perseus analysis complete:")
+    
+    message("✓ Perseus analysis complete:")
     message("  Features found: ", nrow(persistence_data))
+    
     if (nrow(persistence_data) > 0) {
       # Analyze the features
       feature_dims <- table(persistence_data[, 1])
       for (dim in names(feature_dims)) {
         message("    Dimension ", dim, ": ", feature_dims[dim], " features")
       }
+      
       # Show most persistent features
       if (nrow(persistence_data) > 0) {
         persistence_values <- persistence_data[, 3] - persistence_data[, 2]
@@ -1804,8 +1560,10 @@ run_perseus_analysis <- function(distance_matrix, output_dir = NULL) {
       original_size = original_size,
       method = "perseus"
     ))
+    
   }, error = function(e) {
     message("Error in Perseus analysis: ", e$message)
+    # *** CORRECTED LOGIC ***
     # Return a failure object on any error.
     empty_diagram <- matrix(nrow = 0, ncol = 3)
     colnames(empty_diagram) <- c("dimension", "birth", "death")
@@ -1824,7 +1582,9 @@ save_analysis_summary  <- function(output_dir, fire_name, analysis_params,
                                    fire_names = NULL) {
   summary_file <- file.path(output_dir, "enhanced_analysis_summary.txt")
   sink(summary_file)
-  cat("=== WILDFIRE TDA ANALYSIS SUMMARY ===\n\n")
+  
+  cat("=== ENHANCED WILDFIRE TDA ANALYSIS SUMMARY ===\n\n")
+  
   if (is_compound_event) {
     cat("COMPOUND FIRE EVENT ANALYSIS\n")
     cat("Event Name: ", fire_name, "\n")
@@ -1834,14 +1594,17 @@ save_analysis_summary  <- function(output_dir, fire_name, analysis_params,
     cat("SINGLE FIRE EVENT ANALYSIS\n")
     cat("Fire Event: ", fire_name, "\n")
   }
+  
   cat("Analysis Time: ", as.character(Sys.time()), "\n")
   cat("Matrix Method: ", analysis_params$matrix_method, "\n\n")
-  cat("== ANALYSIS SCOPE ==\n")
+  
+  cat("--- ENHANCED ANALYSIS SCOPE ---\n")
   cat("Analysis Type: ", if (is_compound_event) "Compound Fire Event" else "Single Fire Event", "\n")
   cat("Area of Interest Radius: ", analysis_params$analysis_radius_km, " km\n")
   cat("Fire Impact Buffer: ", analysis_params$fire_buffer_km, " km\n")
   cat("Matrix Generation: Enhanced multi-factor approach\n\n")
-  cat("== TDA RESULTS ==\n")
+  
+  cat("--- ENHANCED TDA RESULTS ---\n")
   cat("Features Before Fire: ", nrow(before_results$persistence_data), "\n")
   cat("Features After Fire: ", nrow(after_results$persistence_data), "\n")
   cat("Feature Change: ", nrow(after_results$persistence_data) - nrow(before_results$persistence_data), "\n")
@@ -1872,11 +1635,12 @@ save_analysis_summary  <- function(output_dir, fire_name, analysis_params,
   }
   
   cat("\n--- ENHANCED ANALYSIS FEATURES ---\n")
-  cat("  Multi-factor distance matrices\n")
-  cat("  Enhanced variance validation\n")
-  cat("  Robust Perseus output parsing\n")
-  cat("  Detailed topological logging\n")
-  cat("  Advanced visualization generation\n")
+  cat("• Multi-factor distance matrices\n")
+  cat("• Enhanced variance validation\n")
+  cat("• Robust Perseus output parsing\n")
+  cat("• Detailed topological logging\n")
+  cat("• Advanced visualization generation\n")
+  
   if (is_compound_event) {
     cat("\n--- COMPOUND EVENT SPECIFICS ---\n")
     for (i in seq_along(fire_names)) {
@@ -1887,7 +1651,7 @@ save_analysis_summary  <- function(output_dir, fire_name, analysis_params,
   }
   
   sink()
-  message("  Enhanced analysis summary saved: ", summary_file)
+  message("✓ Enhanced analysis summary saved: ", summary_file)
 }
 
 downsample_matrix <- function(mat, max_pts) {
@@ -1899,58 +1663,72 @@ downsample_matrix <- function(mat, max_pts) {
 }
 
 calculate_wasserstein_distance <- function(P1, P2, p = 2, dimension = NULL) {
+  
   message("DEBUG: Wasserstein distance calculation:")
   message("  P1 dimensions: ", ifelse(is.null(P1), "NULL", paste(dim(P1), collapse = "x")))
   message("  P2 dimensions: ", ifelse(is.null(P2), "NULL", paste(dim(P2), collapse = "x")))
+  
   # Handle NULL inputs
   if (is.null(P1) && is.null(P2)) {
     message("  Both diagrams are NULL - returning 0")
     return(0)
   }
+  
   if (is.null(P1)) P1 <- matrix(nrow = 0, ncol = 3)
   if (is.null(P2)) P2 <- matrix(nrow = 0, ncol = 3)
+  
   # Convert to matrices if needed
   if (!is.matrix(P1)) P1 <- as.matrix(P1)
   if (!is.matrix(P2)) P2 <- as.matrix(P2)
+  
   # Handle empty diagrams
   if (nrow(P1) == 0 && nrow(P2) == 0) {
     message("  Both diagrams are empty - returning 0")
     return(0)
   }
+  
   if (nrow(P1) == 0 && nrow(P2) > 0) {
     total_persistence <- sum(P2[, 3] - P2[, 2])
     message("  P1 empty, P2 has ", nrow(P2), " features - returning ", total_persistence)
     return(total_persistence)
   }
+  
   if (nrow(P2) == 0 && nrow(P1) > 0) {
     total_persistence <- sum(P1[, 3] - P1[, 2])
     message("  P2 empty, P1 has ", nrow(P1), " features - returning ", total_persistence)
     return(total_persistence)
   }
+  
   # Ensure correct column names for TDA package
   if (ncol(P1) >= 3) colnames(P1) <- c("dimension", "birth", "death")
   if (ncol(P2) >= 3) colnames(P2) <- c("dimension", "birth", "death")
+  
   message("  P1 features: ", nrow(P1), " (dims: ", paste(unique(P1[,1]), collapse = ","), ")")
   message("  P2 features: ", nrow(P2), " (dims: ", paste(unique(P2[,1]), collapse = ","), ")")
+  
   # Display some feature information for debugging
   if (nrow(P1) > 0) {
     p1_persistence <- P1[, 3] - P1[, 2]
     message("  P1 persistence range: [", round(min(p1_persistence), 4), ", ", round(max(p1_persistence), 4), "]")
   }
+  
   if (nrow(P2) > 0) {
     p2_persistence <- P2[, 3] - P2[, 2]
     message("  P2 persistence range: [", round(min(p2_persistence), 4), ", ", round(max(p2_persistence), 4), "]")
   }
+  
   tryCatch({
     if (is.null(dimension)) {
       # Calculate Wasserstein distance for all dimensions present
       dims_P1 <- unique(P1[, 1])
       dims_P2 <- unique(P2[, 1])
       all_dims <- unique(c(dims_P1, dims_P2))
+      
       total_distance <- 0
       for (dim in all_dims) {
         P1_dim <- P1[P1[, 1] == dim, , drop = FALSE]
         P2_dim <- P2[P2[, 1] == dim, , drop = FALSE]
+        
         if (nrow(P1_dim) > 0 || nrow(P2_dim) > 0) {
           dim_distance <- TDA::wasserstein(P1_dim, P2_dim, p = p, dimension = dim)
           message("  Dimension ", dim, " distance: ", round(dim_distance, 6))
@@ -1968,20 +1746,26 @@ calculate_wasserstein_distance <- function(P1, P2, p = 2, dimension = NULL) {
     }
   }, error = function(e) {
     message("WARNING: Wasserstein calculation failed: ", e$message)
+    
     # Enhanced fallback calculation
     if (nrow(P1) == 0 && nrow(P2) == 0) return(0)
+    
     # Calculate based on feature count difference and persistence differences
     p1_persistence <- if (nrow(P1) > 0) sum(P1[, 3] - P1[, 2]) else 0
     p2_persistence <- if (nrow(P2) > 0) sum(P2[, 3] - P2[, 2]) else 0
+    
     persistence_diff <- abs(p1_persistence - p2_persistence)
     feature_count_diff <- abs(nrow(P1) - nrow(P2)) * 0.1
+    
     fallback_distance <- persistence_diff + feature_count_diff
+    
     message("  Using enhanced fallback calculation:")
     message("    P1 total persistence: ", round(p1_persistence, 4))
     message("    P2 total persistence: ", round(p2_persistence, 4))
     message("    Persistence difference: ", round(persistence_diff, 4))
     message("    Feature count penalty: ", round(feature_count_diff, 4))
     message("    Final fallback distance: ", round(fallback_distance, 6))
+    
     return(fallback_distance)
   })
 }
@@ -1992,12 +1776,27 @@ extract_bus_ids_from_csv_matrix <- function(matrix_data) {
     # If no names, assume sequential bus IDs
     return(1:nrow(matrix_data))
   }
+  
   # Extract from row names (handle "bus_123" or "123" formats)
   bus_ids <- as.numeric(gsub("bus_", "", rownames(matrix_data)))
+  
   # Remove any NAs and ensure we have valid bus IDs
   bus_ids <- bus_ids[!is.na(bus_ids)]
   
   return(bus_ids)
 }
 
+
+
+# =================================================================================================
+# SCRIPT INITIALIZATION AND USAGE INFORMATION
+# =================================================================================================
+
 message("=== Perseus Analysis Script Loaded ===")
+message("")
+message("Key corrections applied:")
+message("  ✓ Fixed file names: M.txt and Moutput_X.txt")
+message("  ✓ Fixed parameters to match working M.txt: g=0, s=0.1, N=10, C=3")
+message("  ✓ Exact matrix format matching working code")
+message("  ✓ Better code organization and spacing")
+message("  ✓ Enhanced error handling and debugging")

@@ -883,7 +883,7 @@ generate_post_cascade_power_matrix <- function(graph_original, cascade_results, 
     power_diff_matrix <- power_diff_matrix / max(power_diff_matrix)
   }
   
-  # Convert to perseus format
+  # Convert to perseus_V3 format
   colnames(power_diff_matrix) <- paste0("bus_", current_power$bus_i)
   result <- data.table(bus_i = current_power$bus_i)
   for (i in seq_len(ncol(power_diff_matrix))) {
