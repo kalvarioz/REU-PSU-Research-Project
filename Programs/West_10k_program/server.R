@@ -9,6 +9,21 @@
 # Brandon Calvario
 # =================================================================================================
 
+source("global.R")
+source("AttackAndCascade.R")
+source("TopologicalDataWorkflowWF.R")
+
+source("modules/initialization.R")
+source("modules/reactive_handlers.R")
+source("modules/map_management.R")
+source("modules/ui_management.R")
+source("modules/observers.R")
+source("modules/ui_renderers.R")
+source("modules/outputs_and_analysis.R")
+source("modules/event_handlers.R")
+
+
+
 server <- function(input, output, session) {
   # 1. System readiness check
   tryCatch({

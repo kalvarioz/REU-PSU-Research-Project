@@ -8,6 +8,11 @@
 #
 # Brandon Calvario
 # =================================================================================================
+library(shinyjs)
+source("modules/initialization.R")
+source("modules/reactive_handlers.R")
+source("modules/map_management.R")
+source("modules/ui_management.R")
 
 ui <- fluidPage(
   # Enable shinyjs
