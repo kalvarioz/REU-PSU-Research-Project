@@ -16,6 +16,7 @@
 # ====================================================================
 # OBSERVER MANAGEMENT
 # ====================================================================
+
 setup_initialization_observers <- function(values) {
   observe({
     tryCatch({
