@@ -123,49 +123,21 @@ Ensure you have all required data files in the appropriate directories:
 
 1. Open RStudio
 2. Set working directory: `Session > Set Working Directory > Choose Directory...`
-3. Navigate to your project folder
-4. Open `app.R`
-5. Click the "Run App" button in the top-right of the editor
-6. The app will launch in a new window or your default browser
-
-### Method 2: Run from R Console
-
-```r
-# Set working directory to project folder
-setwd("path/to/WildfireGridResilience")
-
-# Load and run the app
-shiny::runApp("app.R")
-```
-
-### Method 3: Run from Command Line
-
-```bash
-# Navigate to project directory
-cd path/to/WildfireGridResilience
-
-# Launch R and run app
-R -e "shiny::runApp('app.R')"
-```
----
-
-# Running the Program
-The file structure should be as follows: 
-Perseus:
-REU-PSU-Research-Project/Programs/West_10k_program/Perseus/perseus.exe
-Dataset:
-REU-PSU-Research-Project/Programs/West_10k_program/databases/
-Server, Rendering, UI
-REU-PSU-Research-Project/Programs/West_10k_program/modules/
-server.R, ui.R, TopologicalWorkflowWF.R, global.R:
-REU-PSU-Research-Project/Programs/West_10k_program/
-
-
-## Set working directory to: 
-REU-PSU-Research-Project/Programs/West_10k_program/
-
-## Run app.R
-
+3. Set to: `REU-PSU-Research-Project/Programs/West_10k_program/`
+4. Navigate to your project folder
+5. Open `app.R`
+6. Click the "Run App" button in the top-right of the editor
+7. The app will launch in a new window or your default browser
+   
+## The file structure should be as follows: 
+### Perseus:
+ - REU-PSU-Research-Project/Programs/West_10k_program/Perseus/perseus.exe
+### Dataset:
+ - REU-PSU-Research-Project/Programs/West_10k_program/databases/
+### Server, Rendering, UI
+ - REU-PSU-Research-Project/Programs/West_10k_program/modules/
+### server.R, ui.R, TopologicalWorkflowWF.R, global.R:
+ - REU-PSU-Research-Project/Programs/West_10k_program/
 
 ## Important Disclaimers
 ### Known Limitations and Issues
