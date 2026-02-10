@@ -149,6 +149,24 @@ R -e "shiny::runApp('app.R')"
 ```
 ---
 
+# Running the Program
+The file structure should be as follows: 
+Perseus:
+REU-PSU-Research-Project/Programs/West_10k_program/Perseus/perseus.exe
+Dataset:
+REU-PSU-Research-Project/Programs/West_10k_program/databases/
+Server, Rendering, UI
+REU-PSU-Research-Project/Programs/West_10k_program/modules/
+server.R, ui.R, TopologicalWorkflowWF.R, global.R:
+REU-PSU-Research-Project/Programs/West_10k_program/
+
+
+## Set working directory to: 
+REU-PSU-Research-Project/Programs/West_10k_program/
+
+## Run app.R
+
+
 ## Important Disclaimers
 ### Known Limitations and Issues
 
@@ -209,131 +227,6 @@ R -e "shiny::runApp('app.R')"
 - Power grid data represents a simplified model and may not reflect actual utility infrastructure
 - Analysis results are for research and educational purposes only
 - **DO NOT use this application for operational decision-making without proper validation**
-
-### Academic Use
-This tool is intended for:
-- Academic research
-- Educational demonstrations
-- Preliminary risk assessment
-- Methodology development
-
-It is **NOT suitable for**:
-- Operational grid management decisions
-- Emergency response planning without validation
-- Regulatory compliance reporting
-- Legal or insurance claims
-
-# File Structure
-### app.R
-- Main application entry point. Sources all modules and launches the Shiny app.
-
-## Core Components
-
-### ui.R
-- Complete user interface definition including control panels, map, and results dashboard
-### server.R
-- Main server function that coordinates all reactive logic and event handling
-
-## Module Files (modules/ directory)
-
-### initialization.R - System Initialization and Management
-
-- Initializes server state and reactive values
-- Checks system readiness
-- Sets up error handlers
-- Processes initial wildfire data
-
-### ui_management.R - UI State Management and Visibility Control
-
-- Manages UI visibility and transitions
-- Updates conditional panels
-- Resets UI state
-- Validates UI readiness
-
-### reactive_handlers.R - Reactive Value Management
-
-- Sets up cascade reactives
-- Manages fire data reactives
-- Handles filter reactives
-- Manages TDA reactives
-- Sets up map reactives
-
-### input_validation.R - Input Validation and Safety
-
-- Safe input access with fallbacks
-- Input existence validation
-- Input readiness checking
-- Input retrieval with fallbacks
-
-### ui_renderers.R - Dynamic UI Rendering
-
-- Renders state selection UI
-- Renders intensity selection UI
-- Renders filter options UI
-- Renders fire selection UI
-- Renders analysis options UI
-
-### event_handlers.R - Event Handler Functions
-
-- State selection handling
-- Intensity selection handling
-- Filter change handling
-- Multiple fire selection handling
-- Cascade execution handling
-- TDA analysis handling
-
-### observers.R - Observer Management
-
-- Initialization observers
-- Data observers
-- UI update observers
-- Map observers
-- Analysis observers
-
-### map_management.R - Map Management and Leaflet Functions
-
-- Base map initialization
-- Map updates and layer management
-- Legend creation and updates
-- Fire perimeter visualization
-- Grid network display
-
-### data_processing.R - Data Processing and Analysis Helpers
-
-- Wildfire data processing
-- Bus proximity calculations
-- Cascade result summarization
-- TDA result summarization
-
-
-### outputs_and_analysis.R - Output Rendering and Analysis
-
-- TDA comparison plots
-- Cascade progression plots
-- System status outputs
-- Resilience plots
-- Fire timeline plots
-- Download handlers
-  
-### Supporting Files
-## global.R
-- Global configuration
-- data loading, and utilities
-## AttackAndCascade.R
-- Cascade failure simulation logic
-## TopologicalDataWorkflowWF.R
-- TDA analysis workflow
-
-### Module Dependencies
-The modules have the following dependencies:
-
-- All modules depend on the base Shiny libraries loaded in app.R
-- ui_renderers.R uses functions from data_processing.R
-- event_handlers.R uses functions from map_management.R and observers.R
-- outputs_and_analysis.R uses functions from data_processing.R
-- server.R orchestrates all modules together
-
----
 
 ### Making Changes
 
