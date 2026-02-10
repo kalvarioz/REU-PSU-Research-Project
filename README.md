@@ -3,6 +3,8 @@
 The increasing frequency and intensity of climate-related threats, particularly in coastal regions, expose the profound vulnerabilities of modern society's critical infrastructure. The systems providing energy, transportation, and telecommunications are not independent entities but form a complex, interconnected web where a failure in one can trigger a cascade of disruptions across the others. Traditional risk assessment methods, which often analyze these sectors in isolation, are no longer sufficient to capture the systemic vulnerabilities that emerge from these interdependencies. This report introduces a novel methodology for quantifying the resilience of these coupled systems by developing a Topology-based Statistical Robustness (TSR) metric.
 
 This TDA project is an interactive Shiny application designed to analyze the impact of wildfires on electrical power grid infrastructure in the western United States. This tool combines geospatial analysis, network science, and topological data analysis (TDA) to assess grid vulnerability and resilience under wildfire conditions, it has been refactored and updated into a modular structure to improve code organization, maintainability, and readability.
+<img width="881" height="844" alt="474158604-39778347-c3cd-436b-afad-bc340d51012b" src="https://github.com/user-attachments/assets/7da759cb-5609-4496-8176-9c73c7c76ae8" />
+
 
 ## System Requirements
 
