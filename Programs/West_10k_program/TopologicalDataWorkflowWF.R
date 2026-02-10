@@ -17,7 +17,7 @@ library(tidyr)
 perseus_config <- list(
   # Input/Output paths
   net_power_csv = "databases/net_power_difference_normalizedTEST.csv",
-  perseus_exe = normalizePath("Perseus/perseusWin.exe", winslash="\\"),
+  perseus_exe = normalizePath("Perseus/perseusLin", winslash="\\"),
   outputs_dir = "outputs/",
   
   # Perseus parameters
@@ -28,7 +28,7 @@ perseus_config <- list(
   persistence_thresh = 0,
   downsample_max_pts = 300,
   
-  # Resource management - CRITICAL FIXES
+  # Resource management
   memory_limit_gb = 32,
   use_adaptive_sampling = TRUE,
   chunk_processing = FALSE,
@@ -1131,7 +1131,7 @@ load_net_power_matrix <- function(file_path) {
   
   # Convert to matrix with explicit NA handling
   if (ncol(dt) > 1) {
-    if (names(dt)[1] %in% c("bus_i", "V1") || is.numeric(dt[[1]])) {
+    if (names(dt)[1] %in% c("bus_i", "BusNum", "V1") || is.numeric(dt[[1]])) {
       mat <- as.matrix(dt[, -1, with = FALSE])
       rownames(mat) <- as.character(dt[[1]])  # Ensure character row names
     } else {
@@ -1407,7 +1407,11 @@ run_perseus <- function(input_file = NULL, output_prefix = NULL) {
   } else {
     # Fallback config
     cfg <- list(
-      perseus_exe = normalizePath("Perseus/perseusWin.exe", winslash="\\"),
+      perseus_exe = if (.Platform$OS.type == "windows") {
+        normalizePath("Perseus/perseusWin.exe", winslash="\\", mustWork = FALSE)
+      } else {
+        normalizePath("Perseus/perseusLin", mustWork = FALSE)
+      },
       outputs_dir = "outputs/"
     )
   }
