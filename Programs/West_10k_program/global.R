@@ -28,7 +28,7 @@ library(ggplot2)
 library(tidyr)
 library(R6)
 library(DT)
-setwd("/home/calvario/Documents/github_projects/REU-PSU-Research-Project/Programs/West_10k_program")
+#setwd("/home/calvario/Documents/github_projects/REU-PSU-Research-Project/Programs/West_10k_program")
 
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
