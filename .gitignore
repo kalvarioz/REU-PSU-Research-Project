@@ -1,4 +1,94 @@
-.Rproj.user
+# =========================
+# R / RStudio
+# =========================
 .Rhistory
 .RData
+.RDataTmp
 .Ruserdata
+.Rproj.user/
+
+# Large resources
+Programs/West_10k_program/outputs/
+Programs/West_10k_program/outputsAttacked/
+Programs/West_10k_program/cache/
+
+cache/
+outputs/
+outputsAttacked/
+*.txt
+
+# Databases
+Programs/West_10k_program/databases/
+
+# Powerworld heavy files
+Programs/West_10k_program/powerworld_resources/
+
+
+# =========================
+# Shiny deployment
+# =========================
+rsconnect/
+
+# =========================
+# Outputs / generated data
+# =========================
+outputs/
+results/
+plots/
+figures/
+diagnostic_output/
+cache/
+
+# =========================
+# Large / intermediate data
+# =========================
+data/
+*.csv
+*.rds
+*.RData
+
+# =========================
+# Reports & documents
+# =========================
+*.pdf
+*.html
+*.docx
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Python (if mixed use)
+# =========================
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# =========================
+# LaTeX
+# =========================
+*.aux
+*.out
+*.toc
+*.nav
+*.snm
+*.bbl
+*.blg
+
+# WFIGS / shapefile datasets (large)
+**/WFIGS_Interagency_Perimeters_*/
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.zip
+
+
+# =========================
+# OS junk
+# =========================
+.DS_Store
+Thumbs.db

@@ -9,6 +9,8 @@
 # Brandon Calvario
 # =================================================================================================
 library(shinyjs)
+library(leaflet)
+
 
 ui <- fluidPage(
   # Enable shinyjs
