@@ -17,8 +17,7 @@ library(tidyr)
 perseus_config <- list(
   # Input/Output paths
   net_power_csv = "databases/net_power_difference_normalizedTEST.csv",
-  # if on windows machine, change to perseusWin.exe.
-  perseus_exe = normalizePath("Perseus/perseusLin", winslash="\\"),
+  perseus_exe <- normalizePath("Perseus/perseusWin.exe", winslash="\\"),
   outputs_dir = "outputs/",
   
   # Perseus parameters
@@ -1136,7 +1135,7 @@ load_net_power_matrix <- function(file_path) {
   
   # Convert to matrix with explicit NA handling
   if (ncol(dt) > 1) {
-    if (names(dt)[1] %in% c("bus_i", "V1") || is.numeric(dt[[1]])) {
+    if (names(dt)[1] %in% c("bus_i", "BusNum", "V1") || is.numeric(dt[[1]])) {
       mat <- as.matrix(dt[, -1, with = FALSE])
       rownames(mat) <- as.character(dt[[1]])  # Ensure character row names
     } else {
@@ -1412,8 +1411,11 @@ run_perseus <- function(input_file = NULL, output_prefix = NULL) {
   } else {
     # Fallback config
     cfg <- list(
-      # if on windows machine, change to perseusWin.exe.
-      perseus_exe = normalizePath("Perseus/perseusLin", winslash="\\"),
+      perseus_exe = if (.Platform$OS.type == "windows") {
+        normalizePath("Perseus/perseusWin.exe", winslash="\\", mustWork = FALSE)
+      } else {
+        normalizePath("Perseus/perseusLin", mustWork = FALSE)
+      },
       outputs_dir = "outputs/"
     )
   }
@@ -1434,7 +1436,14 @@ run_perseus <- function(input_file = NULL, output_prefix = NULL) {
   }
   
   # Run Perseus exactly like working code
-  perseus_cmd <- paste(cfg$perseus_exe, "distmat", input_file, output_prefix)
+  perseus_cmd <- paste(
+    shQuote(perseus_config$perseus_exe),
+    "distmat",
+    shQuote(input_file),
+    shQuote(output_prefix)
+  )
+  
+  # perseus_cmd <- paste(cfg$perseus_exe, "distmat", input_file, output_prefix)
   message("Running Perseus: ", perseus_cmd)
   result <- system(perseus_cmd, intern = TRUE)
   # Check outputs
@@ -1763,7 +1772,14 @@ run_perseus_analysis <- function(distance_matrix, output_dir = NULL) {
     input_file <- write_enhanced_perseus_file(distance_matrix, output_dir)
     output_prefix <- file.path(output_dir, perseus_config$perseus_output_prefix)
     # Run Perseus with timeout
-    perseus_cmd <- paste(perseus_config$perseus_exe, "distmat", input_file, output_prefix)
+    perseus_cmd <- paste(
+      shQuote(perseus_config$perseus_exe),
+      "distmat",
+      shQuote(input_file),
+      shQuote(output_prefix)
+    )
+    
+    # perseus_cmd <- paste(perseus_config$perseus_exe, "distmat", input_file, output_prefix)
     message("Executing Perseus: ", perseus_cmd)
     system_result <- system(perseus_cmd, timeout = perseus_config$timeout_seconds)
     # If Perseus fails, return a failure object instead of calling an alternative function.

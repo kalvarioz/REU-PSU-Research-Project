@@ -8,7 +8,8 @@
 #
 # Brandon Calvario
 # =================================================================================================
-library("shinyjs")
+library(shinyjs)
+
 ui <- fluidPage(
   # Enable shinyjs
   useShinyjs(),

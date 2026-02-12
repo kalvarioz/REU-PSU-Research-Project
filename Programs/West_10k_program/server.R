@@ -8,8 +8,7 @@
 #
 # Brandon Calvario
 # =================================================================================================
-
-
+#global will call functions that are required from server.
 
 server <- function(input, output, session) {
   # 1. System readiness check
