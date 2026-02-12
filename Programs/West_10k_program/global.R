@@ -27,6 +27,8 @@ library(TDAstats)
 library(ggplot2)
 library(tidyr)
 library(R6)
+library(DT)
+setwd("/home/calvario/Documents/github_projects/REU-PSU-Research-Project/Programs/West_10k_program")
 
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
@@ -185,7 +187,11 @@ cfg <- list(
   outputs_dir   = "outputs/",
   outputs_attacked_dir = "outputsAttacked/",
   cache_dir     = "cache/",
-  perseus_exe   = normalizePath("Perseus/perseusWin.exe", winslash="\\"),
+  perseus_exe   = if (.Platform$OS.type == "windows") {
+    normalizePath("Perseus/perseusWin.exe", winslash="\\", mustWork = FALSE)
+  } else {
+    normalizePath("Perseus/perseusLin", mustWork = FALSE)
+  },
   western_states = c("washington", "oregon", "california", "idaho", "nevada", 
                      "montana", "wyoming", "utah", "colorado", "arizona", 
                      "new mexico"),
@@ -255,7 +261,11 @@ get_perseus_config <- function() {
     warning("perseus_V3.R not loaded, using fallback config")
     return(list(
       outputs_dir = "outputs/",
-      perseus_exe = normalizePath("Perseus/perseusWin.exe", winslash="\\"),
+      perseus_exe = if (.Platform$OS.type == "windows") {
+        normalizePath("Perseus/perseusWin.exe", winslash="\\", mustWork = FALSE)
+      } else {
+        normalizePath("Perseus/perseusLin", mustWork = FALSE)
+      },
       g = 0, s = 0.1, N = 10, C = 3
     ))
   }
@@ -2003,7 +2013,12 @@ initialize_system <- function() {
       return(invisible(FALSE))
     })
   }
-  initialize_healthy_state_baseline()
+  # --- Initialize healthy state baseline (requires load_net_power_matrix from TopologicalDataWorkflowWF.R) ---
+  baseline_result <- initialize_healthy_state_baseline()
+  if (!baseline_result$success) {
+    message("WARNING: Healthy state baseline failed: ", baseline_result$error)
+    message("  TDA analysis will NOT be available until this is resolved.")
+  }
   
   # --- Final Steps (always run) ---
   create_color_palettes()
@@ -2011,6 +2026,9 @@ initialize_system <- function() {
   
   if (system_initialized) {
     message("\n System initialization complete. All components loaded.")
+    if (!baseline_result$success) {
+      message("  NOTE: Healthy state matrix NOT loaded - TDA will be unavailable.")
+    }
   } else {
     message("\n (!!!) System initialization failed. Please review errors above.")
   }
@@ -2120,11 +2138,42 @@ create_color_palettes <- function() {
     tda_impact_colors <<- c("Fire Impact" = "#E63946", "Cascade Failures" = "#06AED5")
   })
 }
+
+# =================================================================================================
+# SOURCE ALL DEPENDENCY FILES
+# These must be sourced HERE in global.R (not in app.R or server.R) because:
+# 1. Shiny ALWAYS runs global.R first, regardless of how the app is launched
+# 2. This guarantees all functions are available before server.R and ui.R execute
+# 3. Sourcing in app.R does NOT work if the app is launched via runApp() or "Run App" button
+# =================================================================================================
+
+# Core analysis engines
+source("AttackAndCascade.R")
+source("TopologicalDataWorkflowWF.R")
+
+# Modular server components
+source("modules/initialization.R")
+source("modules/ui_management.R")
+source("modules/reactive_handlers.R")
+source("modules/input_validation.R")
+source("modules/ui_renderers.R")
+source("modules/event_handlers.R")
+source("modules/observers.R")
+source("modules/map_management.R")
+source("modules/data_processing.R")
+source("modules/outputs_and_analysis.R")
+
+message("All dependency files sourced successfully.")
+
+# =================================================================================================
+# SYSTEM INITIALIZATION
+# Runs AFTER all files are sourced, so functions like load_net_power_matrix() are available.
+# =================================================================================================
 if (!exists("system_initialized") || !system_initialized) {
   system_initialized <- tryCatch({
     initialize_system()
   }, error = function(e) {
-    message(" (!!!) System initialization failed with error: ", e$message)
+    message("(!!!) System initialization failed with error: ", e$message)
     FALSE
   })
   

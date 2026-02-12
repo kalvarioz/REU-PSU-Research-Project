@@ -373,8 +373,8 @@ setup_map_observers <- function(input, values, selected_fire, selected_state, se
     groups_to_show <- c()
     groups_to_hide <- c()
     
-    if (!is.null(input$show_buses) && input$show_buses) groups_to_show <- c(groups_to_show, "initial_buses")
-    else groups_to_hide <- c(groups_to_hide, "initial_buses")
+    if (!is.null(input$show_buses) && input$show_buses) groups_to_show <- c(groups_to_show, "initial_buses", "at_risk_buses")
+    else groups_to_hide <- c(groups_to_hide, "initial_buses", "at_risk_buses")
     
     if (!is.null(input$show_lines) && input$show_lines) groups_to_show <- c(groups_to_show, "initial_lines")
     else groups_to_hide <- c(groups_to_hide, "initial_lines")
@@ -387,6 +387,9 @@ setup_map_observers <- function(input, values, selected_fire, selected_state, se
     
     if (!is.null(input$show_impact_zones) && input$show_impact_zones) groups_to_show <- c(groups_to_show, "impact_zones")
     else groups_to_hide <- c(groups_to_hide, "impact_zones")
+    
+    if (!is.null(input$show_analysis_radius) && input$show_analysis_radius) groups_to_show <- c(groups_to_show, "analysis_radius")
+    else groups_to_hide <- c(groups_to_hide, "analysis_radius")
     
     for (group in groups_to_show) proxy %>% showGroup(group)
     for (group in groups_to_hide) proxy %>% hideGroup(group)
@@ -481,8 +484,87 @@ setup_analysis_observers <- function(input, values, session = NULL) {
     proxy <- leafletProxy("map") %>% 
       clearGroup("simulation") %>%
       clearGroup("failed_elements") %>%
+      clearGroup("at_risk_buses") %>%
       hideGroup("initial_buses") %>%
       hideGroup("initial_lines")
+    
+    # Redraw impact buffer zones if available and toggled on
+    if (!is.null(input$show_impact_zones) && input$show_impact_zones) {
+      proxy <- proxy %>% clearGroup("impact_zones")
+      tryCatch({
+        if (!is.null(values$fire_impact_buffer)) {
+          buffer_km <- values$fire_impact_buffer_km %||% "?"
+          proxy <- proxy %>%
+            addPolygons(
+              data = st_as_sf(data.frame(geometry = values$fire_impact_buffer)),
+              group = "impact_zones",
+              color = "#FF8C00", weight = 2, dashArray = "8,6",
+              fillColor = "#FF8C00", fillOpacity = 0.08,
+              popup = paste0("Fire Impact Buffer: ", buffer_km, " km")
+            )
+        }
+        if (!is.null(values$fire_center_buffers)) {
+          buffer_km <- values$fire_impact_buffer_km %||% "?"
+          proxy <- proxy %>%
+            addPolygons(
+              data = values$fire_center_buffers,
+              group = "impact_zones",
+              color = "#DC3545", weight = 2, dashArray = "5,5",
+              fillColor = "#DC3545", fillOpacity = 0.05,
+              popup = ~paste0("Fire Center Buffer: ", buffer_km, " km<br>Fire: ", attr_IncidentName)
+            )
+        }
+      }, error = function(e) message("Buffer draw warning: ", e$message))
+    }
+    
+    # Redraw analysis radius if available and toggled on
+    if (!is.null(input$show_analysis_radius) && input$show_analysis_radius) {
+      tryCatch({
+        if (!is.null(values$analysis_radius_circle)) {
+          radius_km <- values$analysis_radius_km %||% "?"
+          proxy <- proxy %>%
+            clearGroup("analysis_radius") %>%
+            addPolygons(
+              data = st_as_sf(data.frame(geometry = values$analysis_radius_circle)),
+              group = "analysis_radius",
+              color = "#6A0DAD", weight = 2.5, dashArray = "10,8",
+              fillColor = "#9B59B6", fillOpacity = 0.04,
+              popup = paste0("TDA Analysis Radius: ", radius_km, " km")
+            )
+          if (!is.null(values$analysis_radius_center)) {
+            proxy <- proxy %>%
+              addCircleMarkers(
+                lng = values$analysis_radius_center[1],
+                lat = values$analysis_radius_center[2],
+                group = "analysis_radius",
+                radius = 4, color = "#6A0DAD",
+                fillColor = "#9B59B6", fillOpacity = 0.8,
+                stroke = TRUE, weight = 2,
+                popup = paste0("Analysis Center<br>Radius: ", radius_km, " km")
+              )
+          }
+        }
+      }, error = function(e) message("Analysis radius draw warning: ", e$message))
+    }
+    
+    # ---- Identify AT-RISK buses: active buses adjacent to failed buses ----
+    at_risk_bus_ids <- integer(0)
+    tryCatch({
+      if (length(buses_lost_so_far) > 0) {
+        # Find neighbors of failed buses in the ORIGINAL graph
+        failed_vertices <- which(V(graph_original)$name %in% as.character(buses_lost_so_far))
+        if (length(failed_vertices) > 0) {
+          neighbor_ids <- unique(unlist(ego(graph_original, order = 1, nodes = failed_vertices, mindist = 1)))
+          neighbor_bus_names <- as.numeric(V(graph_original)$name[neighbor_ids])
+          # At-risk = neighbors that are still active (not already failed)
+          at_risk_bus_ids <- setdiff(neighbor_bus_names, buses_lost_so_far)
+        }
+      }
+    }, error = function(e) message("At-risk calculation warning: ", e$message))
+    
+    # Split active buses into functional vs at-risk
+    buses_at_risk_sf <- buses_sf %>% filter(bus_i %in% at_risk_bus_ids)
+    buses_functional_sf <- buses_active_sf %>% filter(!bus_i %in% at_risk_bus_ids)
     
     # Add FAILED branches (in red)
     if (input$show_lines && !is.null(edges_failed_sf) && nrow(edges_failed_sf) > 0) {
@@ -508,29 +590,87 @@ setup_analysis_observers <- function(input, values, session = NULL) {
         )
     }
     
-    # Add FAILED buses (as gray 'X's)
+    # Add FAILED buses with severity-coded X markers
     if (input$show_buses && nrow(buses_failed_sf) > 0) {
-      proxy <- proxy %>%
-        addMarkers(
-          data = buses_failed_sf,
-          group = "failed_elements",
-          icon = makeIcon(iconUrl = "https://img.icons8.com/ios-filled/50/a0a0a0/delete-sign.png", 
-                          iconWidth=12, iconHeight=12),
-          popup = ~paste0("Bus: ", bus_i, "  Status: FAILED")
+      # Color X icons by bus type severity
+      buses_failed_with_info <- buses_failed_sf %>%
+        mutate(
+          severity = case_when(
+            bus_type == "Gen + Load" ~ "Critical",
+            bus_type == "Generator" ~ "High",
+            bus_type == "Load" ~ "Moderate",
+            TRUE ~ "Low"
+          ),
+          icon_color = case_when(
+            bus_type == "Gen + Load" ~ "ff0000",   # Red 
+            bus_type == "Generator" ~ "ff8c00",     # Orange
+            bus_type == "Load"      ~ "4169E1",     # Blue
+            TRUE                    ~ "a0a0a0"      # Gray
+          ),
+          popup_text = paste0(
+            "<b>Bus: ", bus_i, "</b><br>",
+            "<span style='color:#dc3545;'>Status: FAILED</span><br>",
+            "Type: ", bus_type, " (", severity, ")<br>",
+            "Gen: ", round(total_gen, 1), " MW<br>",
+            "Load: ", round(load_mw, 1), " MW<br>",
+            "Total Impact: ", round(total_gen + load_mw, 1), " MW"
+          )
         )
+      
+      # Use different colored X icons per severity
+      for (sev_group in split(buses_failed_with_info, buses_failed_with_info$icon_color)) {
+        icon_url <- paste0("https://img.icons8.com/ios-filled/50/", 
+                           sev_group$icon_color[1], "/delete-sign.png")
+        proxy <- proxy %>%
+          addMarkers(
+            data = sev_group,
+            group = "failed_elements",
+            icon = makeIcon(iconUrl = icon_url, iconWidth = 14, iconHeight = 14),
+            popup = ~popup_text
+          )
+      }
     }
     
-    # Add ACTIVE buses
-    if (input$show_buses && nrow(buses_active_sf) > 0) {
+    # Add AT-RISK buses (yellow/amber pulsing markers)
+    if (input$show_buses && nrow(buses_at_risk_sf) > 0) {
       proxy <- proxy %>%
         addCircleMarkers(
-          data = buses_active_sf,
+          data = buses_at_risk_sf,
+          group = "at_risk_buses",
+          radius = 6,
+          color = "#FF8C00",
+          fillColor = "#FFD700",
+          fillOpacity = 0.7,
+          stroke = TRUE, weight = 2,
+          popup = ~paste0(
+            "<b>Bus: ", bus_i, "</b><br>",
+            "<span style='color:#FF8C00;font-weight:bold;'>Status: AT RISK</span><br>",
+            "Type: ", bus_type, "<br>",
+            "Gen: ", round(total_gen, 1), " MW<br>",
+            "Load: ", round(load_mw, 1), " MW<br>",
+            "<i>Adjacent to failed bus - may lose power</i>"
+          )
+        )
+      message("At-risk buses displayed: ", nrow(buses_at_risk_sf))
+    }
+    
+    # Add FUNCTIONAL buses (fully operational, original coloring)
+    if (input$show_buses && nrow(buses_functional_sf) > 0) {
+      proxy <- proxy %>%
+        addCircleMarkers(
+          data = buses_functional_sf,
           group = "simulation",
-          radius = 5, 
+          radius = 4, 
           color = ~bus_pal(bus_type), 
           fillOpacity = 0.8,
           stroke = TRUE, weight = 1,
-          popup = ~paste0("Bus: ", bus_i, "<br>Type: ", bus_type, "<br>Status: Active")
+          popup = ~paste0(
+            "<b>Bus: ", bus_i, "</b><br>",
+            "<span style='color:#28a745;'>Status: Functional</span><br>",
+            "Type: ", bus_type, "<br>",
+            "Gen: ", round(total_gen, 1), " MW<br>",
+            "Load: ", round(load_mw, 1), " MW"
+          )
         )
     }
     

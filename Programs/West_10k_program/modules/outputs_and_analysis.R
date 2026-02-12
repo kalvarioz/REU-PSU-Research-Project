@@ -9,10 +9,274 @@
 # - System status outputs
 # - Resilience plots
 # - Fire timeline plots
+# - Damage assessment tables (bus type breakdown, risk sorting)
 # - Download handlers (results, plots, GIS data, matrices)
 #
 # Brandon Calvario
 # =================================================================================================
+
+# Helper: Create archive with fallback for systems without zip
+safe_archive <- function(archive_file, files_to_archive) {
+  zip_ok <- tryCatch({
+    zip(archive_file, files_to_archive, flags = "-j")
+    TRUE
+  }, error = function(e) FALSE,
+  warning = function(w) file.exists(archive_file))
+  
+  if (!zip_ok || !file.exists(archive_file)) {
+    tryCatch({
+      tar_file <- sub("\\.zip$", ".tar.gz", archive_file)
+      tar(tar_file, files_to_archive, compression = "gzip")
+      if (file.exists(tar_file)) file.copy(tar_file, archive_file, overwrite = TRUE)
+    }, error = function(e) {
+      if (length(files_to_archive) > 0 && file.exists(files_to_archive[1]))
+        file.copy(files_to_archive[1], archive_file, overwrite = TRUE)
+    })
+  }
+}
+
+# Helper: Compute damage assessment data from cascade results
+compute_damage_assessment <- function(cascade_results, step = NULL) {
+  
+  message("=== DAMAGE ASSESSMENT COMPUTATION ===")
+  
+  # Step 1: Determine step and gather lost buses
+  if (is.null(step) || step <= 0) step <- length(cascade_results$graphs) - 1
+  n_steps <- length(cascade_results$buses_lost_per_step)
+  message("  Requested step: ", step, " | Available steps: ", n_steps)
+  
+  if (n_steps == 0) {
+    message("  WARNING: buses_lost_per_step is empty")
+    return(list(bus_damage = data.frame(), branch_damage = data.frame(),
+                type_summary = data.frame(), total_gen_lost_mw = 0, 
+                total_load_lost_mw = 0, n_lost = 0))
+  }
+  
+  step <- min(step, n_steps)
+  all_lost_buses <- unique(unlist(cascade_results$buses_lost_per_step[1:step]))
+  message("  Total lost buses up to step ", step, ": ", length(all_lost_buses))
+  
+  if (length(all_lost_buses) == 0) {
+    message("  No buses lost - returning empty result")
+    return(list(bus_damage = data.frame(), branch_damage = data.frame(),
+                type_summary = data.frame(), total_gen_lost_mw = 0, 
+                total_load_lost_mw = 0, n_lost = 0))
+  }
+  
+  # Step 2: Get bus details
+  if (!exists("bus_info") || nrow(bus_info) == 0) {
+    message("  ERROR: bus_info not available")
+    return(NULL)
+  }
+  
+  lost_bus_data <- tryCatch({
+    df <- bus_info %>% sf::st_drop_geometry() %>% dplyr::filter(bus_i %in% all_lost_buses)
+    message("  Matched buses in bus_info: ", nrow(df))
+    df
+  }, error = function(e) {
+    message("  ERROR filtering bus_info: ", e$message)
+    return(NULL)
+  })
+  
+  if (is.null(lost_bus_data) || nrow(lost_bus_data) == 0) {
+    message("  WARNING: No matching buses found in bus_info")
+    return(list(bus_damage = data.frame(), branch_damage = data.frame(),
+                type_summary = data.frame(), total_gen_lost_mw = 0, 
+                total_load_lost_mw = 0, n_lost = 0))
+  }
+  
+  # Step 3: Add power impact and severity (safe - no complex sapply)
+  lost_bus_data <- lost_bus_data %>%
+    dplyr::mutate(
+      power_impact_mw = total_gen + load_mw,
+      severity = dplyr::case_when(
+        bus_type == "Gen + Load" ~ "Critical",
+        bus_type == "Generator" ~ "High",
+        bus_type == "Load" ~ "Moderate",
+        TRUE ~ "Low"
+      )
+    )
+  
+  # Step 4: Determine failure cause (isolated from main pipeline)
+  failure_causes <- tryCatch({
+    causes <- rep("Cascade Failure", nrow(lost_bus_data))
+    for (i in seq_len(nrow(lost_bus_data))) {
+      b <- lost_bus_data$bus_i[i]
+      for (s in seq_len(step)) {
+        if (b %in% cascade_results$buses_lost_per_step[[s]]) {
+          # Check fire_points_list safely
+          fp <- cascade_results$fire_points_list[[s]]
+          if (!is.null(fp) && nrow(fp) > 0) {
+            fp_bus_ids <- tryCatch(fp$bus_i, error = function(e) integer(0))
+            if (b %in% fp_bus_ids) {
+              impact <- tryCatch({
+                idx <- which(fp_bus_ids == b)[1]
+                as.character(fp$impact_type[idx])
+              }, error = function(e) "fire")
+              causes[i] <- paste0("Fire (", tools::toTitleCase(impact), ") - Step ", s)
+            } else {
+              causes[i] <- paste0("Cascade - Step ", s)
+            }
+          } else {
+            causes[i] <- paste0("Cascade - Step ", s)
+          }
+          break  # Found the step, stop looking
+        }
+      }
+    }
+    causes
+  }, error = function(e) {
+    message("  WARNING: Could not determine failure causes: ", e$message)
+    rep("Unknown", nrow(lost_bus_data))
+  })
+  
+  lost_bus_data$failure_cause <- failure_causes
+  lost_bus_data <- lost_bus_data %>% dplyr::arrange(dplyr::desc(power_impact_mw))
+  
+  # Step 5: Build bus damage table
+  bus_damage <- tryCatch({
+    # Safely select columns (baseKV might not exist)
+    cols_available <- names(lost_bus_data)
+    base_kv_col <- if ("baseKV" %in% cols_available) lost_bus_data$baseKV 
+    else if ("base_kv" %in% cols_available) lost_bus_data$base_kv
+    else rep(NA, nrow(lost_bus_data))
+    
+    data.frame(
+      Bus = lost_bus_data$bus_i,
+      Type = lost_bus_data$bus_type,
+      Severity = lost_bus_data$severity,
+      `Gen (MW)` = round(lost_bus_data$total_gen, 1),
+      `Load (MW)` = round(lost_bus_data$load_mw, 1),
+      `Total Impact (MW)` = round(lost_bus_data$power_impact_mw, 1),
+      `Base kV` = round(base_kv_col, 1),
+      Cause = lost_bus_data$failure_cause,
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+  }, error = function(e) {
+    message("  ERROR building bus_damage table: ", e$message)
+    data.frame()
+  })
+  
+  message("  Bus damage table: ", nrow(bus_damage), " rows")
+  
+  # Step 6: Build type summary
+  type_summary <- tryCatch({
+    lost_bus_data %>%
+      dplyr::group_by(bus_type) %>%
+      dplyr::summarise(
+        count = dplyr::n(),
+        gen_lost_mw = sum(total_gen, na.rm = TRUE),
+        load_lost_mw = sum(load_mw, na.rm = TRUE),
+        total_impact_mw = sum(power_impact_mw, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      dplyr::arrange(dplyr::desc(total_impact_mw)) %>%
+      dplyr::rename(
+        `Bus Type` = bus_type, `Count` = count,
+        `Gen Lost (MW)` = gen_lost_mw, `Load Lost (MW)` = load_lost_mw,
+        `Total Impact (MW)` = total_impact_mw
+      )
+  }, error = function(e) {
+    message("  ERROR building type_summary: ", e$message)
+    data.frame()
+  })
+  
+  message("  Type summary: ", nrow(type_summary), " types")
+  
+  # Step 7: Branch damage (with column name detection)
+  branch_damage <- tryCatch({
+    if (!exists("branch_info") || nrow(branch_info) == 0) {
+      message("  branch_info not available, skipping branch damage")
+      return(data.frame())
+    }
+    
+    bi_cols <- names(branch_info)
+    message("  branch_info columns: ", paste(head(bi_cols, 15), collapse = ", "))
+    
+    # Detect the correct column names (handles left_join .x/.y suffixes)
+    from_col <- if ("from_bus" %in% bi_cols) "from_bus"
+    else if ("from_bus.x" %in% bi_cols) "from_bus.x"
+    else if ("fbus" %in% bi_cols) "fbus"
+    else NULL
+    to_col   <- if ("to_bus" %in% bi_cols) "to_bus"
+    else if ("to_bus.x" %in% bi_cols) "to_bus.x"
+    else if ("tbus" %in% bi_cols) "tbus"
+    else NULL
+    rate_col <- if ("rateA" %in% bi_cols) "rateA"
+    else if ("RateA" %in% bi_cols) "RateA"
+    else NULL
+    r_col    <- if ("r" %in% bi_cols) "r" else if ("LineR" %in% bi_cols) "LineR" else NULL
+    x_col    <- if ("x" %in% bi_cols) "x" else if ("LineX" %in% bi_cols) "LineX" else NULL
+    
+    if (is.null(from_col) || is.null(to_col)) {
+      message("  WARNING: Cannot find from/to bus columns in branch_info")
+      message("  Available columns: ", paste(bi_cols, collapse = ", "))
+      return(data.frame())
+    }
+    
+    message("  Using columns: from=", from_col, " to=", to_col, " rate=", rate_col)
+    
+    from_buses <- branch_info[[from_col]]
+    to_buses <- branch_info[[to_col]]
+    
+    affected_idx <- which(from_buses %in% all_lost_buses | to_buses %in% all_lost_buses)
+    if (length(affected_idx) == 0) {
+      message("  No affected branches found")
+      return(data.frame())
+    }
+    
+    # Build branch damage df manually for safety
+    affected_df <- data.frame(
+      From = from_buses[affected_idx],
+      To = to_buses[affected_idx],
+      stringsAsFactors = FALSE
+    )
+    
+    # Add rate, r, x if available
+    if (!is.null(rate_col)) affected_df$`Rate A (MVA)` <- branch_info[[rate_col]][affected_idx]
+    if (!is.null(r_col)) affected_df$`R (p.u.)` <- branch_info[[r_col]][affected_idx]
+    if (!is.null(x_col)) affected_df$`X (p.u.)` <- branch_info[[x_col]][affected_idx]
+    
+    # Add status
+    affected_df$Status <- ifelse(
+      affected_df$From %in% all_lost_buses & affected_df$To %in% all_lost_buses,
+      "Destroyed", "Degraded"
+    )
+    
+    # Look up bus types for from/to
+    bus_type_lookup <- stats::setNames(
+      as.character(bus_info$bus_type), 
+      as.character(bus_info$bus_i)
+    )
+    affected_df$`From Type` <- bus_type_lookup[as.character(affected_df$From)]
+    affected_df$`To Type` <- bus_type_lookup[as.character(affected_df$To)]
+    affected_df$`From Type`[is.na(affected_df$`From Type`)] <- "Unknown"
+    affected_df$`To Type`[is.na(affected_df$`To Type`)] <- "Unknown"
+    
+    # Sort by rate and limit
+    if ("Rate A (MVA)" %in% names(affected_df)) {
+      affected_df <- affected_df[order(-affected_df$`Rate A (MVA)`), ]
+    }
+    
+    head(affected_df, 500)
+  }, error = function(e) {
+    message("  ERROR building branch_damage: ", e$message)
+    data.frame()
+  })
+  
+  message("  Branch damage: ", nrow(branch_damage), " rows")
+  message("=== DAMAGE ASSESSMENT COMPLETE ===")
+  
+  return(list(
+    bus_damage = bus_damage,
+    branch_damage = branch_damage,
+    type_summary = type_summary,
+    total_gen_lost_mw = sum(lost_bus_data$total_gen, na.rm = TRUE),
+    total_load_lost_mw = sum(lost_bus_data$load_mw, na.rm = TRUE),
+    n_lost = length(all_lost_buses)
+  ))
+}
 
 # ====================================================================
 # OUTPUT FUNCTIONS AND ANALYSIS EXECUTION
@@ -633,6 +897,287 @@ render_output_functions <- function(output, values, input, selected_fire, select
   outputOptions(output, "cascade_available", suspendWhenHidden = FALSE)
   
   # ====================================================================
+  # DAMAGE ASSESSMENT OUTPUTS
+  # ====================================================================
+  
+  # Reactive: compute damage data (reacts to step slider and cascade results)
+  damage_data <- reactive({
+    req(values$enhanced_cascade_results)
+    step <- if (!is.null(input$step)) input$step else NULL
+    compute_damage_assessment(values$enhanced_cascade_results, step)
+  })
+  
+  # Bus type damage breakdown summary (colored cards)
+  output$damage_type_summary <- renderUI({
+    dd <- damage_data()
+    if (is.null(dd) || nrow(dd$type_summary) == 0) {
+      return(div(class = "alert alert-info", "No damage detected at this step."))
+    }
+    
+    total_gen <- dd$total_gen_lost_mw
+    total_load <- dd$total_load_lost_mw
+    n_lost <- dd$n_lost
+    
+    # Color mapping for bus types
+    type_colors <- list(
+      "Gen + Load" = list(bg = "#f8d7da", border = "#dc3545", icon = "bolt", label = "Critical"),
+      "Generator"  = list(bg = "#fff3cd", border = "#ffc107", icon = "industry", label = "High"),
+      "Load"       = list(bg = "#d1ecf1", border = "#17a2b8", icon = "plug", label = "Moderate"),
+      "Neither"    = list(bg = "#e2e3e5", border = "#6c757d", icon = "circle", label = "Low")
+    )
+    
+    # Build summary cards for each bus type
+    type_cards <- lapply(seq_len(nrow(dd$type_summary)), function(i) {
+      row <- dd$type_summary[i, ]
+      bt <- row$`Bus Type`
+      cfg <- type_colors[[bt]] %||% type_colors[["Neither"]]
+      
+      div(
+        style = paste0(
+          "background: ", cfg$bg, "; border-left: 4px solid ", cfg$border,
+          "; padding: 8px 12px; margin-bottom: 6px; border-radius: 4px;"
+        ),
+        fluidRow(
+          column(5,
+                 span(style = "font-weight: bold; font-size: 13px;",
+                      icon(cfg$icon), " ", bt),
+                 br(),
+                 span(style = "font-size: 11px; color: #666;",
+                      "Severity: ", cfg$label)
+          ),
+          column(3,
+                 span(style = "font-size: 12px;",
+                      strong(row$Count), " bus(es)"),
+                 br(),
+                 span(style = "font-size: 11px; color: #666;",
+                      round(row$`Gen Lost (MW)`, 1), " MW gen")
+          ),
+          column(4,
+                 span(style = "font-size: 12px;",
+                      strong(round(row$`Total Impact (MW)`, 1)), " MW total"),
+                 br(),
+                 span(style = "font-size: 11px; color: #666;",
+                      round(row$`Load Lost (MW)`, 1), " MW load")
+          )
+        )
+      )
+    })
+    
+    tagList(
+      # Top-level summary
+      div(style = "background: #f5f5f5; padding: 10px; border-radius: 6px; margin-bottom: 10px;",
+          fluidRow(
+            column(4, 
+                   h6(style = "margin: 0; color: #333;", icon("times-circle"), " Total Lost"),
+                   p(style = "margin: 0; font-size: 18px; font-weight: bold; color: #dc3545;",
+                     n_lost, " buses")),
+            column(4,
+                   h6(style = "margin: 0; color: #333;", icon("industry"), " Gen Lost"),
+                   p(style = "margin: 0; font-size: 18px; font-weight: bold; color: #e65100;",
+                     round(total_gen, 1), " MW")),
+            column(4,
+                   h6(style = "margin: 0; color: #333;", icon("plug"), " Load Lost"),
+                   p(style = "margin: 0; font-size: 18px; font-weight: bold; color: #1565c0;",
+                     round(total_load, 1), " MW"))
+          )
+      ),
+      # Per-type cards
+      do.call(tagList, type_cards)
+    )
+  })
+  
+  # Affected buses table (sorted by power impact)
+  output$damage_bus_table <- DT::renderDataTable({
+    dd <- damage_data()
+    if (is.null(dd) || nrow(dd$bus_damage) == 0) {
+      return(DT::datatable(data.frame(Message = "No buses affected"), 
+                           options = list(dom = 't')))
+    }
+    
+    DT::datatable(
+      dd$bus_damage,
+      options = list(
+        pageLength = 15,
+        scrollX = TRUE,
+        order = list(list(5, 'desc')),  # Sort by Total Impact descending
+        dom = 'frtip',
+        columnDefs = list(
+          list(className = 'dt-center', targets = '_all')
+        )
+      ),
+      rownames = FALSE,
+      class = 'compact stripe hover'
+    ) %>%
+      DT::formatRound(columns = c('Gen (MW)', 'Load (MW)', 'Total Impact (MW)', 'Base kV'), digits = 1) %>%
+      DT::formatStyle(
+        'Severity',
+        backgroundColor = DT::styleEqual(
+          c('Critical', 'High', 'Moderate', 'Low'),
+          c('#f8d7da', '#fff3cd', '#d1ecf1', '#e2e3e5')
+        ),
+        fontWeight = 'bold'
+      ) %>%
+      DT::formatStyle(
+        'Type',
+        color = DT::styleEqual(
+          c('Gen + Load', 'Generator', 'Load', 'Neither'),
+          c('#dc3545', '#e65100', '#1565c0', '#6c757d')
+        ),
+        fontWeight = 'bold'
+      )
+  })
+  
+  # Affected branches table
+  output$damage_branch_table <- DT::renderDataTable({
+    dd <- damage_data()
+    if (is.null(dd) || nrow(dd$branch_damage) == 0) {
+      return(DT::datatable(data.frame(Message = "No branches affected"),
+                           options = list(dom = 't')))
+    }
+    
+    DT::datatable(
+      dd$branch_damage,
+      options = list(
+        pageLength = 15,
+        scrollX = TRUE,
+        order = list(list(5, 'desc')),  # Sort by Rate A descending
+        dom = 'frtip',
+        columnDefs = list(
+          list(className = 'dt-center', targets = '_all')
+        )
+      ),
+      rownames = FALSE,
+      class = 'compact stripe hover'
+    ) %>%
+      DT::formatRound(columns = c('Rate A (MVA)', 'R (p.u.)', 'X (p.u.)'), digits = 4) %>%
+      DT::formatStyle(
+        'Status',
+        backgroundColor = DT::styleEqual(
+          c('Destroyed', 'Degraded'),
+          c('#f8d7da', '#fff3cd')
+        ),
+        fontWeight = 'bold'
+      )
+  })
+  
+  # Low-impact fire indicator
+  output$low_impact_indicator <- renderUI({
+    req(values$enhanced_cascade_results)
+    if (isTRUE(values$enhanced_cascade_results$is_low_impact)) {
+      div(
+        class = "alert alert-warning",
+        style = "padding: 10px; margin: 8px 0; font-size: 12px; border-left: 4px solid #ffc107;",
+        icon("exclamation-triangle"),
+        strong(" Low Impact Fire: "),
+        values$enhanced_cascade_results$low_impact_message
+      )
+    }
+  })
+  
+  # ====================================================================
+  # VIEW BUTTON HANDLERS
+  # ====================================================================
+  
+  # View Cascade Progression
+  observeEvent(input$view_cascade_progression, {
+    tryCatch({
+      if (!is.null(values$tda_results) && values$tda_results$success &&
+          !is.null(values$tda_results$plots_list)) {
+        plot_obj <- values$tda_results$plots_list$cascade_progression %||%
+          values$tda_results$plots_list$summary
+        if (!is.null(plot_obj) && inherits(plot_obj, "ggplot")) {
+          showModal(modalDialog(
+            title = "Cascade Progression", size = "l",
+            renderPlot({ plot_obj }, height = 550),
+            easyClose = TRUE, footer = modalButton("Close")
+          ))
+        } else {
+          showNotification("Cascade progression plot not available.", type = "warning")
+        }
+      } else {
+        showNotification("Run TDA analysis first.", type = "warning")
+      }
+    }, error = function(e) {
+      showNotification(paste("Error:", e$message), type = "error")
+    })
+  })
+  
+  # View Persistence Diagrams
+  observeEvent(input$view_persistence_diagrams, {
+    tryCatch({
+      if (!is.null(values$tda_results) && values$tda_results$success &&
+          !is.null(values$tda_results$plots_list)) {
+        plots <- values$tda_results$plots_list
+        plot_to_show <- plots$comparison %||% plots$persistence_after %||% plots[[1]]
+        
+        if (!is.null(plot_to_show) && inherits(plot_to_show, "ggplot")) {
+          showModal(modalDialog(
+            title = "Persistence Diagrams", size = "l",
+            renderPlot({ plot_to_show }, height = 500),
+            easyClose = TRUE,
+            footer = tagList(
+              if (!is.null(plots$persistence_before))
+                actionButton("modal_show_before", "Before", class = "btn-info btn-sm"),
+              if (!is.null(plots$persistence_after))
+                actionButton("modal_show_after", "After", class = "btn-warning btn-sm"),
+              if (!is.null(plots$comparison))
+                actionButton("modal_show_comparison", "Comparison", class = "btn-success btn-sm"),
+              modalButton("Close")
+            )
+          ))
+        } else {
+          showNotification("No persistence plots available.", type = "warning")
+        }
+      } else {
+        showNotification("Run TDA analysis first.", type = "warning")
+      }
+    }, error = function(e) {
+      showNotification(paste("Error:", e$message), type = "error")
+    })
+  })
+  
+  # Modal navigation for persistence diagram switching
+  observeEvent(input$modal_show_before, {
+    plot_obj <- values$tda_results$plots_list$persistence_before
+    if (!is.null(plot_obj)) {
+      showModal(modalDialog(
+        title = "Persistence Diagram - Before Fire", size = "l",
+        renderPlot({ plot_obj }, height = 500), easyClose = TRUE,
+        footer = tagList(
+          actionButton("modal_show_after", "After", class = "btn-warning btn-sm"),
+          actionButton("modal_show_comparison", "Comparison", class = "btn-success btn-sm"),
+          modalButton("Close"))
+      ))
+    }
+  })
+  observeEvent(input$modal_show_after, {
+    plot_obj <- values$tda_results$plots_list$persistence_after
+    if (!is.null(plot_obj)) {
+      showModal(modalDialog(
+        title = "Persistence Diagram - After Fire", size = "l",
+        renderPlot({ plot_obj }, height = 500), easyClose = TRUE,
+        footer = tagList(
+          actionButton("modal_show_before", "Before", class = "btn-info btn-sm"),
+          actionButton("modal_show_comparison", "Comparison", class = "btn-success btn-sm"),
+          modalButton("Close"))
+      ))
+    }
+  })
+  observeEvent(input$modal_show_comparison, {
+    plot_obj <- values$tda_results$plots_list$comparison
+    if (!is.null(plot_obj)) {
+      showModal(modalDialog(
+        title = "TDA Before/After Comparison", size = "l",
+        renderPlot({ plot_obj }, height = 500), easyClose = TRUE,
+        footer = tagList(
+          actionButton("modal_show_before", "Before", class = "btn-info btn-sm"),
+          actionButton("modal_show_after", "After", class = "btn-warning btn-sm"),
+          modalButton("Close"))
+      ))
+    }
+  })
+  
+  # ====================================================================
   # ENHANCED DOWNLOAD HANDLERS
   # ====================================================================
   output$download_tda_plots <- downloadHandler(
@@ -695,12 +1240,12 @@ render_output_functions <- function(output, values, input, selected_fire, select
       plot_files <- c(plot_files, summary_file)
       
       if (length(plot_files) > 0) {
-        zip(file, plot_files, flags = "-j")
+        safe_archive(file, plot_files)
       } else {
         # Create empty zip with error message
         error_file <- file.path(temp_dir, "no_plots_available.txt")
         writeLines("No plots available for download", error_file)
-        zip(file, error_file, flags = "-j")
+        safe_archive(file, c(error_file))
       }
     }
   )
@@ -788,7 +1333,7 @@ render_output_functions <- function(output, values, input, selected_fire, select
       sink()
       # Create zip file
       files_to_zip <- list.files(temp_dir, full.names = TRUE)
-      zip(file, files_to_zip, flags = "-j")
+      safe_archive(file, files_to_zip)
     }
   )
   
@@ -820,11 +1365,11 @@ render_output_functions <- function(output, values, input, selected_fire, select
       }
       
       if (length(plot_files) > 0) {
-        zip(file, plot_files, flags = "-j")
+        safe_archive(file, plot_files)
       } else {
         error_file <- file.path(temp_dir, "no_plots_available.txt")
         writeLines("No plots available for download", error_file)
-        zip(file, error_file, flags = "-j")
+        safe_archive(file, c(error_file))
       }
     }
   )
@@ -848,7 +1393,7 @@ render_output_functions <- function(output, values, input, selected_fire, select
         "- Analysis area boundaries"
       ), gis_file)
       
-      zip(file, gis_file, flags = "-j")
+      safe_archive(file, c(gis_file))
     }
   )
   
@@ -871,7 +1416,7 @@ render_output_functions <- function(output, values, input, selected_fire, select
         "- Power difference matrices"
       ), matrices_file)
       
-      zip(file, matrices_file, flags = "-j")
+      safe_archive(file, c(matrices_file))
     }
   )
 }

@@ -17,7 +17,8 @@ library(tidyr)
 perseus_config <- list(
   # Input/Output paths
   net_power_csv = "databases/net_power_difference_normalizedTEST.csv",
-  perseus_exe = normalizePath("Perseus/perseusWin.exe", winslash="\\"),
+  # if on windows machine, change to perseusWin.exe.
+  perseus_exe = normalizePath("Perseus/perseusLin", winslash="\\"),
   outputs_dir = "outputs/",
   
   # Perseus parameters
@@ -28,7 +29,7 @@ perseus_config <- list(
   persistence_thresh = 0,
   downsample_max_pts = 300,
   
-  # Resource management - CRITICAL FIXES
+  # Resource management
   memory_limit_gb = 32,
   use_adaptive_sampling = TRUE,
   chunk_processing = FALSE,
@@ -280,7 +281,9 @@ run_fixed_smart_tda_workflow <- function(fire_data, bus_info, graph_original,
       wasserstein_distance = wasserstein_dist,
       is_compound_event = is_compound_event,
       fire_count = length(fire_names),
-      fire_names = fire_names
+      fire_names = fire_names,
+      analysis_radius_km = analysis_radius_km,
+      fire_buffer_km = fire_impact_buffer_km
     )
     
     plots_list <- create_comprehensive_tda_visualization_set(
@@ -314,7 +317,9 @@ run_fixed_smart_tda_workflow <- function(fire_data, bus_info, graph_original,
     before_features = nrow(tda_before_results$persistence_data),
     after_features = nrow(tda_after_results$persistence_data),
     plots_list = plots_list,
-    cascade_results = cascade_results # Return the full cascade results
+    cascade_results = cascade_results, # Return the full cascade results
+    analysis_params = analysis_parameters,
+    analysis_radius_km = analysis_radius_km
   ))
 }
 
@@ -1407,7 +1412,8 @@ run_perseus <- function(input_file = NULL, output_prefix = NULL) {
   } else {
     # Fallback config
     cfg <- list(
-      perseus_exe = normalizePath("Perseus/perseusWin.exe", winslash="\\"),
+      # if on windows machine, change to perseusWin.exe.
+      perseus_exe = normalizePath("Perseus/perseusLin", winslash="\\"),
       outputs_dir = "outputs/"
     )
   }
