@@ -199,39 +199,164 @@ handle_cascade_execution <- function(input, values, selected_fire, session) {
         result$parallel_used <- TRUE
         values$cascade_results <- result
         values$enhanced_cascade_results <- result
-        incProgress(0.8, detail = "Updating interface...")
+        incProgress(0.7, detail = "Updating interface...")
         # Update slider
         max_steps <- min(length(result$graphs) - 1, cfg$simulation_steps)
         updateSliderInput(session, "step", min = 1, max = max_steps, value = 1)
+        
+        # --- Compute and draw fire impact buffer on map ---
+        tryCatch({
+          buffer_km <- input$buffer_km
+          fire_geom <- fire_data
+          
+          buffer_dist <- if (st_is_longlat(fire_geom)) buffer_km * 1000 else buffer_km / 111
+          fire_buffer_geom <- st_buffer(st_union(fire_geom), dist = buffer_dist)
+          values$fire_impact_buffer <- fire_buffer_geom
+          values$fire_impact_buffer_km <- buffer_km
+          
+          # Also buffer fire centers if available
+          if ("has_center_point" %in% names(fire_data)) {
+            fires_with_centers <- fire_data %>%
+              filter(has_center_point == TRUE, !is.na(attr_InitialLatitude), !is.na(attr_InitialLongitude))
+            if (nrow(fires_with_centers) > 0) {
+              fire_centers_sf <- st_as_sf(fires_with_centers,
+                                          coords = c("attr_InitialLongitude", "attr_InitialLatitude"), crs = st_crs(fire_geom))
+              values$fire_center_buffers <- st_buffer(fire_centers_sf, dist = buffer_dist)
+            }
+          }
+          
+          # Draw buffer on map
+          proxy <- leafletProxy("map") %>% clearGroup("impact_zones")
+          proxy <- proxy %>%
+            addPolygons(
+              data = st_as_sf(data.frame(geometry = fire_buffer_geom)),
+              group = "impact_zones",
+              color = "#FF8C00", weight = 2, dashArray = "8,6",
+              fillColor = "#FF8C00", fillOpacity = 0.08,
+              popup = paste0("Fire Impact Buffer: ", buffer_km, " km")
+            )
+          if (!is.null(values$fire_center_buffers)) {
+            proxy <- proxy %>%
+              addPolygons(
+                data = values$fire_center_buffers,
+                group = "impact_zones",
+                color = "#DC3545", weight = 2, dashArray = "5,5",
+                fillColor = "#DC3545", fillOpacity = 0.05,
+                popup = ~paste0("Fire Center Buffer: ", buffer_km, " km<br>Fire: ", attr_IncidentName)
+              )
+          }
+          message("Impact buffer drawn on map (", buffer_km, " km)")
+        }, error = function(e) {
+          message("Warning: Could not draw impact buffer: ", e$message)
+        })
+        
+        incProgress(0.9, detail = "Computing damage assessment...")
+        
+        # Compute damage summary stats
+        total_affected <- sum(sapply(result$buses_lost_per_step, length))
+        final_buses <- vcount(result$graphs[[length(result$graphs)]])
+        is_low_impact <- total_affected <= 2
+        
+        # Compute damage breakdown by bus type
+        damage_summary <- tryCatch({
+          all_lost <- unique(unlist(result$buses_lost_per_step))
+          if (length(all_lost) > 0 && exists("bus_info")) {
+            lost_info <- bus_info %>% st_drop_geometry() %>% filter(bus_i %in% all_lost)
+            list(
+              gen_load_lost = sum(lost_info$bus_type == "Gen + Load"),
+              gen_lost = sum(lost_info$bus_type == "Generator"),
+              load_lost = sum(lost_info$bus_type == "Load"),
+              total_gen_mw = round(sum(lost_info$total_gen, na.rm = TRUE), 1),
+              total_load_mw = round(sum(lost_info$load_mw, na.rm = TRUE), 1)
+            )
+          } else {
+            list(gen_load_lost = 0, gen_lost = 0, load_lost = 0, total_gen_mw = 0, total_load_mw = 0)
+          }
+        }, error = function(e) {
+          list(gen_load_lost = 0, gen_lost = 0, load_lost = 0, total_gen_mw = 0, total_load_mw = 0)
+        })
+        
         incProgress(1.0, detail = "Complete!")
-        # Clean up connections after successful completion
+        
+        # Clean up connections
         connection_count_after <- monitor_connections()
         if (connection_count_after > connection_count + 5) {
           message("Connection count increased significantly, cleaning up...")
           cleanup_parallel_resources()
         }
-        # Success notification
-        total_affected <- sum(sapply(result$buses_lost_per_step, length))
-        final_buses <- vcount(result$graphs[[length(result$graphs)]])
         
-        showNotification(
-          div(
-            h5("Cascade Complete!"),
-            p("Fire: ", strong(fire_name)),
-            p("Buffer: ", strong(input$buffer_km), " km"),
-            p("Buses Affected: ", strong(total_affected)),
-            p("Final Grid Size: ", strong(final_buses), " buses"),
-            br(),
-            div(style = "text-align: center;",
-                actionButton("run_tda_after_cascade", "Run TDA Analysis",
-                             class = "btn-success", 
-                             onclick = "document.getElementById('run_wildfire_tda').click();")
-            )
-          ),
-          type = "message",
-          duration = 15,
-          closeButton = TRUE
-        )
+        # Store low-impact flag for UI
+        values$enhanced_cascade_results$is_low_impact <- is_low_impact
+        if (is_low_impact) {
+          values$enhanced_cascade_results$low_impact_message <- paste0(
+            "Low impact: only ", total_affected, " bus(es) affected. ",
+            "Fire may be too far from grid infrastructure.")
+        }
+        
+        if (is_low_impact) {
+          # LOW IMPACT NOTIFICATION
+          showNotification(
+            div(
+              h5(style = "color: #856404;", icon("info-circle"), " Low Impact Fire"),
+              div(style = "background: #fff3cd; padding: 10px; border-radius: 6px; border-left: 4px solid #ffc107; margin: 8px 0;",
+                  p(style = "margin: 0; font-weight: bold; color: #856404;",
+                    "This fire is unlikely to cause major grid damage."),
+                  p(style = "margin: 4px 0 0 0; font-size: 12px; color: #856404;",
+                    "Only ", strong(total_affected), " bus(es) affected within the ",
+                    strong(input$buffer_km), " km impact buffer.")
+              ),
+              p("Fire: ", strong(fire_name)),
+              p("Final Grid: ", strong(final_buses), " / ", strong(vcount(graph_original)), " buses intact"),
+              if (total_affected == 0) {
+                div(style = "background: #d4edda; padding: 8px; border-radius: 4px; margin-top: 8px;",
+                    p(style = "margin: 0; font-size: 12px; color: #155724;",
+                      icon("check-circle"), " No buses in fire impact range. ",
+                      "Consider increasing the impact buffer."))
+              },
+              br(),
+              div(style = "text-align: center;",
+                  actionButton("run_tda_after_cascade", "Run TDA Analysis Anyway",
+                               class = "btn-warning btn-sm", 
+                               onclick = "document.getElementById('run_wildfire_tda').click();"))
+            ),
+            type = "warning", duration = 20, closeButton = TRUE
+          )
+        } else {
+          # NORMAL IMPACT NOTIFICATION with damage breakdown
+          showNotification(
+            div(
+              h5(icon("check-circle"), " Cascade Complete!"),
+              p("Fire: ", strong(fire_name)),
+              p("Buffer: ", strong(input$buffer_km), " km"),
+              div(style = "background: #f8f9fa; padding: 8px; border-radius: 4px; margin: 5px 0;",
+                  p(style = "margin: 2px 0; font-size: 12px;",
+                    icon("bolt"), " Buses Lost: ", strong(total_affected),
+                    " (", final_buses, " remaining)"),
+                  if (damage_summary$gen_load_lost > 0) {
+                    p(style = "margin: 2px 0; font-size: 12px; color: #dc3545;",
+                      "  Gen+Load (Critical): ", strong(damage_summary$gen_load_lost))
+                  },
+                  if (damage_summary$gen_lost > 0) {
+                    p(style = "margin: 2px 0; font-size: 12px; color: #e65100;",
+                      "  Generator (High): ", strong(damage_summary$gen_lost))
+                  },
+                  if (damage_summary$load_lost > 0) {
+                    p(style = "margin: 2px 0; font-size: 12px; color: #1565c0;",
+                      "  Load (Moderate): ", strong(damage_summary$load_lost))
+                  },
+                  p(style = "margin: 4px 0 0 0; font-size: 11px; color: #666;",
+                    "Power lost: ", damage_summary$total_gen_mw, " MW gen + ",
+                    damage_summary$total_load_mw, " MW load")
+              ),
+              br(),
+              div(style = "text-align: center;",
+                  actionButton("run_tda_after_cascade", "Run TDA Analysis",
+                               class = "btn-success", 
+                               onclick = "document.getElementById('run_wildfire_tda').click();"))
+            ),
+            type = "message", duration = 15, closeButton = TRUE
+          )
+        }
         
       }, error = function(e) {
         # Clean up on error
@@ -462,6 +587,65 @@ handle_tda_analysis<- function(input, values, selected_fire, session) {
         message("Wasserstein distance: ", analysis_results$wasserstein_distance)
         message("Before features: ", analysis_results$before_features)
         message("After features: ", analysis_results$after_features)
+        
+        # --- Draw analysis radius circle on the map ---
+        tryCatch({
+          # Compute centroid of fire geometry for radius center
+          fire_centroid <- st_centroid(st_union(fire_data))
+          centroid_coords <- st_coordinates(fire_centroid)
+          
+          # Buffer for analysis radius (larger circle, different from impact buffer)
+          radius_dist <- if (st_is_longlat(fire_data)) {
+            analysis_radius * 1000  # meters for longlat
+          } else {
+            analysis_radius / 111  # approximate degrees
+          }
+          analysis_circle <- st_buffer(fire_centroid, dist = radius_dist)
+          
+          # Store for persistence during map updates
+          values$analysis_radius_circle <- analysis_circle
+          values$analysis_radius_km <- analysis_radius
+          values$analysis_radius_center <- centroid_coords
+          
+          # Draw on map
+          leafletProxy("map") %>%
+            clearGroup("analysis_radius") %>%
+            addPolygons(
+              data = st_as_sf(data.frame(geometry = analysis_circle)),
+              group = "analysis_radius",
+              color = "#6A0DAD",       # Purple
+              weight = 2.5,
+              dashArray = "10,8",      # Long dash
+              fillColor = "#9B59B6",
+              fillOpacity = 0.04,
+              popup = paste0(
+                "<b>TDA Analysis Radius</b><br>",
+                "Radius: ", analysis_radius, " km<br>",
+                "Buses in this area are used for<br>",
+                "before/after topology comparison"
+              )
+            ) %>%
+            # Add center point marker
+            addCircleMarkers(
+              lng = centroid_coords[1], lat = centroid_coords[2],
+              group = "analysis_radius",
+              radius = 4,
+              color = "#6A0DAD",
+              fillColor = "#9B59B6",
+              fillOpacity = 0.8,
+              stroke = TRUE, weight = 2,
+              popup = paste0(
+                "<b>Analysis Center</b><br>",
+                "Lat: ", round(centroid_coords[2], 4), "<br>",
+                "Lon: ", round(centroid_coords[1], 4), "<br>",
+                "Analysis Radius: ", analysis_radius, " km"
+              )
+            )
+          
+          message("Analysis radius drawn on map (", analysis_radius, " km)")
+        }, error = function(e) {
+          message("Warning: Could not draw analysis radius: ", e$message)
+        })
         
         # Enhanced success notification
         showNotification(

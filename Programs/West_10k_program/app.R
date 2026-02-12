@@ -1,6 +1,3 @@
-
-Copy
-
 # =================================================================================================
 # app.R - Main Application Entry Point
 # Modular Wildfire Grid Resilience Application

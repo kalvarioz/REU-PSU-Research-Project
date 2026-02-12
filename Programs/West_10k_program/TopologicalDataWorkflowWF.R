@@ -280,7 +280,9 @@ run_fixed_smart_tda_workflow <- function(fire_data, bus_info, graph_original,
       wasserstein_distance = wasserstein_dist,
       is_compound_event = is_compound_event,
       fire_count = length(fire_names),
-      fire_names = fire_names
+      fire_names = fire_names,
+      analysis_radius_km = analysis_radius_km,
+      fire_buffer_km = fire_impact_buffer_km
     )
     
     plots_list <- create_comprehensive_tda_visualization_set(
@@ -314,7 +316,9 @@ run_fixed_smart_tda_workflow <- function(fire_data, bus_info, graph_original,
     before_features = nrow(tda_before_results$persistence_data),
     after_features = nrow(tda_after_results$persistence_data),
     plots_list = plots_list,
-    cascade_results = cascade_results # Return the full cascade results
+    cascade_results = cascade_results, # Return the full cascade results
+    analysis_params = analysis_parameters,
+    analysis_radius_km = analysis_radius_km
   ))
 }
 

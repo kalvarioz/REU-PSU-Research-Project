@@ -9,8 +9,6 @@
 # Brandon Calvario
 # =================================================================================================
 library(shinyjs)
-library(leaflet)
-
 
 ui <- fluidPage(
   # Enable shinyjs
@@ -369,8 +367,11 @@ ui <- fluidPage(
             ),
             
             fluidRow(column(
-              6, checkboxInput("show_impact_zones", "Impact Zones", FALSE)
+              6, checkboxInput("show_impact_zones", "Impact Buffer Zones", TRUE)
             ), column(
+              6, checkboxInput("show_analysis_radius", "TDA Analysis Radius", TRUE)
+            )),
+            fluidRow(column(
               6, checkboxInput("show_cascade_flow", "Cascade Flow", FALSE)
             ))
           ),
@@ -463,6 +464,7 @@ ui <- fluidPage(
             # Add cascade status indicator
             div(
               id = "cascade-status",
+              uiOutput("low_impact_indicator"),
               conditionalPanel(
                 condition = "output.cascade_available",
                 div(
@@ -625,6 +627,41 @@ ui <- fluidPage(
                     class = "alert alert-info",
                     icon("info-circle"),
                     " Run TDA analysis to see detailed results here."
+                  )
+                )
+              ),
+              
+              tabPanel(
+                "Damage Assessment",
+                br(),
+                conditionalPanel(
+                  condition = "output.cascade_available",
+                  div(
+                    # Bus type damage breakdown summary
+                    h5(icon("bolt"), " Damage by Bus Type"),
+                    uiOutput("damage_type_summary"),
+                    br(),
+                    
+                    # Affected buses table
+                    h5(icon("exclamation-triangle"), " Affected Buses (sorted by power impact)"),
+                    p("Buses sorted from highest to lowest impact. Gen + Load buses cause the most",
+                      " disruption when lost.", style = "font-size: 11px; color: #666;"),
+                    DT::dataTableOutput("damage_bus_table"),
+                    br(),
+                    
+                    # Affected branches table
+                    h5(icon("project-diagram"), " Affected Branches"),
+                    p("Transmission lines connected to failed buses, sorted by capacity (Rate A).",
+                      style = "font-size: 11px; color: #666;"),
+                    DT::dataTableOutput("damage_branch_table")
+                  )
+                ),
+                conditionalPanel(
+                  condition = "!output.cascade_available",
+                  div(
+                    class = "alert alert-info",
+                    icon("info-circle"),
+                    " Run cascade simulation to see damage assessment."
                   )
                 )
               ),
